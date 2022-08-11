@@ -1,0 +1,1593 @@
+---
+title: "Biomarker Analysis"
+author: "Munir Winkel, PhD "
+date: "December 2021, amended in February, June and August 2022 by and Pascale Vonaesch, PhD"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    theme: cosmo
+    highlight: tango
+    df_print: paged
+  html_notebook:
+    toc: yes
+editor_options:
+  chunk_output_type: console
+---
+
+```{r global options, include=FALSE, warning=FALSE, message=FALSE, echo= FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE
+                      , error = FALSE, eval = TRUE )
+#-- 3d plot option
+options(rgl.useNULL = TRUE) 
+library(magrittr); library(ggplot2); library(rgl); library(dplyr); library(vtable); library(flextable)
+
+rm(list = ls())
+setwd( "/Users/admin/Desktop/Papers and manuscripts/under revision/Biomarker paper/Revisions/Ranalysis")
+source("useful_functions.R") 
+devAskNewPage(ask = FALSE)
+
+# data to be taken out as we have multiple measurements or as they are below the detection limit, i added back the igas and the gmu and took out all cytokines in feces and duodenum
+cytokinesbelowdetection <- c('gcsf_feces', 'gmcsf_feces','il13_feces','il15_feces','il17_feces','il1b_duo','il1b_feces','il2r_feces','il4_feces','il5_feces','il6_feces','il7_feces','il8_feces','mcp1_feces','mig_feces','mip1a_feces','mip1b_feces','rantes_duo','tnfa_feces','egf_feces','hgf_feces','il10_feces','eotaxin_feces','fgfbasic_feces','ifna_feces','ifng_feces','il1ra_feces','il4_duo','il8_duo','il2r_duo','ifna_duo','il12_feces','il1ra_duo','il2_feces','il6_duo','il7_duo','mig_duo','mcp1_duo','vegf_feces','vegf_duo','ip10_feces','il2_duo','il5_duo','ip10_duo','rantes_feces','tnfa_duo','mip1a_duo','mip1b_duo')
+
+
+
+#-- custom dataset
+datt = read.csv("/Users/admin/Desktop/Papers and manuscripts/under revision/Biomarker paper/Revisions/Supplements/Supplementary File 1_biomarker_data_revised.csv" ) %>%
+  dplyr::select( - cytokinesbelowdetection) %>%
+  tibble::as_tibble()
+
+# look at the variables that are in the dataset
+colnames(datt)
+nrow(datt)
+table(datt$pays)
+table(datt$pays, datt$stunted)
+
+# how many samples are shared in between the different biomarkers? il10 blood as a proxy for all blood cytokines (missing imputed), iga_feces as a proxy for gut Immunoglobulins, bcca_geomean as a proxy of branched chain amino acids, gmu200 as a proxy for endocab values
+
+
+controls = c( "citrulline","iga_feces","AAT_feces", "iga_blood"
+              ,"il10_blood", "crp", "cal_feces", "valin", "gmu200", "igf_n")
+datt_biomarkers<-datt[, c(controls)]
+
+sumtable(datt_biomarkers,
+         summ=c('notNA(x)',
+                'propNA(x)'))
+
+datt_Mada<-subset(datt, pays=="Madagascar")
+datt_CAR<-subset(datt, pays=="RCA")
+datt_Mada_bm<-datt_Mada[, c(controls)]
+datt_CAR_bm<-datt_CAR[, c(controls)]
+
+sumtable(datt_Mada_bm,
+         summ=c('notNA(x)',
+                'propNA(x)'))
+
+sumtable(datt_CAR_bm,
+         summ=c('notNA(x)',
+                'propNA(x)'))
+
+calpro<-datt[which(!is.na(datt$cal_feces)==TRUE), ]
+aat<-datt[which(!is.na(datt$AAT_feces)==TRUE), ]
+citrullin<-datt[which(!is.na(datt$citrulline)==TRUE), ]
+igfeces<-datt[which(!is.na(datt$iga_feces)==TRUE), ]
+igblood<-datt[which(!is.na(datt$iga_blood)==TRUE), ]
+cyto<-datt[which(!is.na(datt$il10_blood)==TRUE), ]
+endocab<-datt[which(!is.na(datt$gmu200)==TRUE), ]
+crp<-datt[which(!is.na(datt$crp)==TRUE), ]
+igf<-datt[which(!is.na(datt$igf_n)==TRUE), ]
+branchedAA<-datt[which(!is.na(datt$bcaa_geomean)==TRUE), ]
+
+
+nrow(intersect(calpro, aat))
+nrow(intersect(calpro, igfeces))
+nrow(intersect(calpro, igblood))
+nrow(intersect(calpro, cyto))
+nrow(intersect(calpro, citrullin))
+nrow(intersect(calpro, crp))
+nrow(intersect(calpro, endocab))
+nrow(intersect(calpro, igf))
+nrow(intersect(calpro, branchedAA))
+
+nrow(intersect(aat, igfeces))
+nrow(intersect(aat, igblood))
+nrow(intersect(aat, cyto))
+nrow(intersect(aat, citrullin))
+nrow(intersect(aat, crp))
+nrow(intersect(aat, endocab))
+nrow(intersect(aat, igf))
+nrow(intersect(aat, branchedAA))
+
+nrow(intersect(igfeces, igblood))
+nrow(intersect(igfeces, cyto))
+nrow(intersect(igfeces, citrullin))
+nrow(intersect(igfeces, crp))
+nrow(intersect(igfeces, endocab))
+nrow(intersect(igfeces, igf))
+nrow(intersect(igfeces, branchedAA))
+
+nrow(intersect(igblood, cyto))
+nrow(intersect(igblood, citrullin))
+nrow(intersect(igblood, crp))
+nrow(intersect(igblood, endocab))
+nrow(intersect(igblood, igf))
+nrow(intersect(igblood, branchedAA))
+
+nrow(intersect(cyto, citrullin))
+nrow(intersect(cyto, crp))
+nrow(intersect(cyto, endocab))
+nrow(intersect(cyto, igf))
+nrow(intersect(cyto, branchedAA))
+
+nrow(intersect(citrullin, crp))
+nrow(intersect(citrullin, endocab))
+nrow(intersect(citrullin, igf))
+nrow(intersect(citrullin, branchedAA))
+
+nrow(intersect(crp, endocab))
+nrow(intersect(crp, igf))
+nrow(intersect(crp, branchedAA))
+
+nrow(intersect(endocab, igf))
+nrow(intersect(endocab, branchedAA))
+
+nrow(intersect(igf, branchedAA))
+
+
+
+```
+
+## Description of Statistical Methods
+
+**Linear Regression** 
+We model continuous response variables (such as height-for-age-z-scores) as a linear function of variables of interest and control variables (such as country of origin, sex, and age). In some cases, we take a square-root or logarithm of the response variable so that the residual terms are closer to being normally distributed. When sample sizes are small, we regress the outcome variable on the first two principle components of a set of variables (e.g. the endocab variables). 
+
+**Bootstrapping**
+Sometimes there are potential outliers in a dataset that have a large influence on the parameter estimates from the linear models. One way of making the analysis more robust is to take samples of the data (with replacement) and analyze the data multiple times. This bootstrapped approach allows us to see which results are sensitive to outliers and which ones are robust. 
+
+
+## Overview 
+
+
+```{r}
+# --- recode variables that can be reported as categorical variables and are not yet categorized
+
+# generate a new variable ferritine and ferritine seuil which is ajusted for inflammation
+
+# generate a new variable for ferritine levels
+
+datt$valine_level<-as.factor(datt$valine_level)
+levels(datt$valine_level) <- c('low', 'normal', 'elevated')
+table(datt$valine_level)
+
+datt$leucine_level<-as.factor(datt$leucine_level)
+levels(datt$leucine_level) <- c('low', 'normal', 'elevated')
+table(datt$leucine_level)
+
+datt$isoleucine_level<-as.factor(datt$isoleucine_level)
+levels(datt$isoleucine_level) <- c('low', 'normal', 'elevated')
+table(datt$isoleucine_level)
+
+datt$alanine_level<-as.factor(datt$alanine_level)
+levels(datt$alanine_level) <- c('low', 'normal', 'elevated')
+table(datt$alanine_level)
+
+datt$bcaa_geomean<-as.numeric(datt$bcaa_geomean)
+
+
+datt <- datt %>% 
+  dplyr::mutate( 
+    # ferritine 
+    ferritine_seuil = dplyr::case_when(
+        ferritine < 11  ~ "Yes",
+        ferritine >= 11 ~ "Non",
+        is.na( ferritine) ~ "Missing")
+    # calpro 
+  , calprotectinlevel = dplyr::case_when(
+      cal_feces_wet >150  ~ "elevated",
+      cal_feces_wet >100 & age > 36  ~ "elevated", 
+      cal_feces_wet <150 & age < 36  ~ "normal",
+      cal_feces_wet < 100 ~ "normal")
+   # aat
+  , AATlevel = dplyr::case_when(
+      AAT_feces > 2  ~ "elevated",
+      AAT_feces < 1.25 | AAT_feces_wet < 0.15   ~ "normal",
+      AAT_feces < 2   ~ "grey zone", 
+      is.na(AAT_feces) ~ "missing")
+  # citrulline
+  , citrullinelevel = dplyr::case_when(
+      citrulline < 16 & age <= 36 & age >24  ~ "too low",
+      citrulline >= 16 & age <= 36 & age >24  ~ "normal",
+      citrulline > 40 & age <= 36 & age >24  ~ "too high",
+      citrulline < 7 & age > 36 | age <=24  ~ "too low",
+      citrulline >= 7 & age > 36 | age <=24  ~ "normal",
+      citrulline > 43 & age > 36 | age <=24  ~ "too high",
+      is.na(citrulline) ~ "missing" )
+  # crp 
+  , crp_seuil = dplyr::case_when(
+      crp <= 10  ~ "normal",
+      crp > 10  ~ "elevated",
+      is.na(crp) ~ "missing")
+
+
+    )
+
+
+table(datt$citrullinelevel, datt$pays)
+100/(13+382)*13
+100/(29+352)*29
+
+table(datt$crp_seuil, datt$pays)
+100/(34+371)*34
+100/(68+274)*68
+
+table(datt$AATlevel, datt$pays)
+100/(27+379)*27
+100/(8+376)*8
+
+table(datt$calprotectinlevel, datt$pays)
+100/(138+237)*138
+100/(84+270)*84
+
+table(endocab$stunted)
+t.test(gmu200 ~ stunted, data = endocab)
+t.test(amu ~ stunted, data = endocab)
+t.test(mmu ~ stunted, data = endocab)
+
+t.test(bcaa_geomean ~ stunted, data = datt)
+
+
+
+#--useful variable lists
+
+blood_cytos = c('fgfbasic_blood', 'il1b_blood', 'gcsf_blood'
+                , 'il10_blood', 'il13_blood', 'il6_blood', 'il12_blood'
+                , 'rantes_blood', 'eotaxin_blood', 'il17_blood', 'mip1a_blood'
+                , 'gmcsf_blood', 'mip1b_blood', 'mcp1_blood', 'il15_blood'
+                , 'egf_blood', 'il5_blood', 'hgf_blood', 'vegf_blood'
+                , 'ifng_blood'
+                , 'ifna_blood', 'il1ra_blood', 'tnfa_blood', 'il2_blood'
+                , 'il7_blood'
+                , 'ip10_blood', 'il2r_blood', 'mig_blood', 'il4_blood'
+                , 'il8_blood')
+
+
+blood_immu = c( 'ige_blood', 'igg1_blood', 'igg2_blood', 'igg3_blood'
+             , 'igg4_blood',  'igm_blood', 'iga_blood', 'fgfbasic_blood'
+             ,'il1b_blood', 'gcsf_blood'
+             , 'il10_blood', 'il13_blood', 'il6_blood', 'il12_blood'
+             , 'rantes_blood', 'eotaxin_blood', 'il17_blood', 'mip1a_blood'
+             , 'gmcsf_blood', 'mip1b_blood', 'mcp1_blood', 'il15_blood'
+             , 'egf_blood', 'il5_blood', 'hgf_blood', 'vegf_blood'
+             , 'ifng_blood'
+             , 'ifna_blood', 'il1ra_blood', 'tnfa_blood', 'il2_blood'
+             , 'il7_blood'
+             , 'ip10_blood', 'il2r_blood', 'mig_blood', 'il4_blood'
+             , 'il8_blood')
+
+plates = c('plate_iga_duo', 'plate_ige_duo', 'plate_igg_igm_duo'
+           , 'plate_blood', 'plate_iggam_blood', 'plate_ige_blood'
+           , 'plate_feces', 'iga_plate_feces', 'igg_plate_feces' )
+
+immus = c(  'iga_feces', 'iga_blood', 'iga_duo'
+          , 'ige_blood', 'ige_duo', 'igg1_blood', 'igg1_duo', 'igg1_feces'
+          , 'igg2_blood', 'igg2_duo', 'igg2_feces', 'igg3_blood', 'igg3_duo'
+          , 'igg3_feces', 'igg4_blood', 'igg4_duo', 'igg4_feces', 'igm_blood'
+          , 'igm_duo', 'igm_feces'
+          , 'fgfbasic_blood', 'il1b_blood', 'gcsf_blood'
+          , 'il10_blood', 'il13_blood', 'il6_blood', 'il12_blood'
+          , 'rantes_blood', 'eotaxin_blood', 'il17_blood', 'mip1a_blood'
+          , 'gmcsf_blood', 'mip1b_blood', 'mcp1_blood', 'il15_blood'
+          , 'egf_blood', 'il5_blood', 'hgf_blood', 'vegf_blood', 'ifng_blood'
+          , 'ifna_blood', 'il1ra_blood', 'tnfa_blood', 'il2_blood', 'il7_blood'
+          , 'ip10_blood', 'il2r_blood', 'mig_blood', 'il4_blood', 'il8_blood')
+
+immunoglob = c('iga_feces', 'iga_blood', 'iga_duo'
+          , 'ige_blood', 'ige_duo', 'igg1_blood', 'igg1_duo', 'igg1_feces'
+          , 'igg2_blood', 'igg2_duo', 'igg2_feces', 'igg3_blood', 'igg3_duo'
+          , 'igg3_feces', 'igg4_blood', 'igg4_duo', 'igg4_feces', 'igm_blood'
+          , 'igm_duo', 'igm_feces')
+
+
+non_duo_immus = immus[ !grepl( "_duo", immus)]
+duo_immus     = immus[  grepl( "_duo", immus)]
+
+
+dat = datt %>% dplyr::select( -c( tpi_level, stunted, haz, anemia
+                                  , dplyr::all_of( plates )))
+
+
+#-- useful datasets
+immu_dat = datt %>% dplyr::select( all_of(immus)
+                      , all_of(plates), all_of(blood_cytos)
+                      , pays, sex, id, haz, stunted )
+
+#--- section of code to identify potential outliers
+long = immu_dat %>%
+  dplyr::select( - all_of( plates) ) %>% 
+  tidyr::pivot_longer( col = dplyr::all_of( immus ) ) %>%
+  dplyr::arrange( name, id ) %>%
+  dplyr::group_by( name ) %>%
+  dplyr::mutate( upper99 =  ifelse( is.numeric(value), quantile(value, probs = .99, na.rm = TRUE ), NA)
+  )
+
+#-- values greater than twice the 99th percentile of each variable
+high = long %>% dplyr::select( - value ) %>%
+  tidyr::pivot_wider(values_from = "upper99", id_cols = c(id, sex, pays ) ) %>%
+  dplyr::mutate( id = "upper99")
+
+#--- creating the potential outlier dataset
+bads = long %>% 
+  dplyr::filter( value > 2 * upper99 ) %>% 
+  dplyr::select( - upper99) %>% 
+  tidyr::pivot_wider( id_cols = c(id, sex, pays))
+
+bad_ids = bads$id %>% unique()
+#--- the values that trigger notification that it's an outlier
+high = data.frame( high[1, colnames(high) %in% colnames(bads)] )
+
+###--- visualizing the outliers in a PCoA type analysis
+immu_pcoa = immu_dat %>% 
+  dplyr::mutate( flagged = ( id %in% bad_ids) ) %>%
+  non_missing( controls = immus[ grepl("feces", immus)]) %>%
+  make_pca_vars( normer = NULL, amp_vars = immus[ grepl("feces", immus)], number_pcs = 3 )
+# dim(immu_pcoa)
+
+long = long %>%
+  dplyr::mutate( flagged = ( id %in% bad_ids) )
+
+```
+
+First we provide an overview of the main variables, by country, and then by country and stunting status. 
+
+```{r}
+
+
+##--- table1 features for all covariables
+table1<-table1::table1( data = datt, 
+                ~ haz + haz_cont + age + hemoglobine + anemia +  ascaris+ trichuris+ giardiase + num_genes
+                 + sda +  saison |  pays 
+                , overall = FALSE)
+
+table1<-as.data.frame(table1)
+
+write.csv(table1, "table1.csv")
+
+##--- table2 features for all biomarkers
+
+
+table2<-table1::table1( data = datt, 
+                ~  lm_ratio + lactitol + tpi_level + ferritine + ferritine_seuil
+                + citrulline + citrullinelevel+ valin + valine_level + alanine + alanine_level + isoleucin + isoleucine_level + leucin + leucine_level + AAT_duo + AAT_feces + AATlevel 
+                  + cal_duo + cal_feces + calprotectinlevel
+                + crp + crp_seuil + igf_n 
+                |  pays + stunted
+                , overall = FALSE)
+
+table2<-as.data.frame(table2)
+
+write.csv(table2, "table2.csv")
+
+
+##--- tableS1 immunoglobulins
+
+tableS1<-table1::table1( data = datt, 
+                ~  iga_feces + ige_blood+ ige_duo+ igg1_blood+ igg1_duo+ igg1_feces+ igg2_blood+ igg2_duo+ igg2_feces+ igg3_blood+ igg3_duo+ igg3_feces+ igg4_blood+ igg4_duo+ igg4_feces+ igm_blood+ igm_duo+ igm_feces 
+                |  pays + stunted
+                , overall = FALSE)
+
+tableS1
+
+tableS1<-as.data.frame(tableS1)
+
+write.csv(tableS1, "tableS1.csv")
+
+##--- tableS2 cytokines blood
+
+tableS2<-table1::table1( data = datt, 
+                ~  fgfbasic_blood
+             +il1b_blood+ gcsf_blood
+             + il10_blood+ il13_blood+ il6_blood+ il12_blood
+             + rantes_blood+ eotaxin_blood+ il17_blood+ mip1a_blood
+             + gmcsf_blood+ mip1b_blood+ mcp1_blood+ il15_blood
+             + egf_blood+ il5_blood+ hgf_blood+ vegf_blood
+             + ifng_blood
+             + ifna_blood+ il1ra_blood+ tnfa_blood+ il2_blood
+             + il7_blood
+             + ip10_blood+ il2r_blood+ mig_blood+ il4_blood
+             + il8_blood
+                |  stunted
+                , overall = FALSE)
+
+tableS2
+
+tableS2<-as.data.frame(tableS2)
+
+write.csv(tableS2, "tableS2.csv")
+
+##--- tableS3 endocab blood
+
+tableS3<-table1::table1( data = datt, 
+                ~  amu + mmu+ gmu200 
+                |  stunted
+                , overall = FALSE)
+
+tableS3
+
+tableS3<-as.data.frame(tableS3)
+
+write.csv(tableS3, "tableS3.csv")
+```
+
+A large number of the variables have missing values. These variables are missing between 3% to 92% of the values, where the majority of variables are missing less than 15% of their values. The endocab variables are missing 92.4% of observations. The blood cytokine values are missing 91% of observations. Immunoglobulin variables in the duodenum are missing aroud 80% of values.
+
+The variables igf_n, tpi_level, lm_ratio, and duodenal immunoglobulin variables are missing more than 50% of their values. Lactitol is missing 27% of its values, virulence gene count is missing around 25%, and AAT_feces is missing 18.9%. 
+
+
+```{r, fig.width = 12}
+
+## --- table of available sample sets 
+length(which(!is.na(datt$plate_blood))==TRUE) # available for blood cytokines: 66
+length(which(!is.na(datt$plate_ige_blood))==TRUE) # available for ige blood: 766
+length(which(!is.na(datt$plate_iggam_blood))==TRUE) # available for ige blood: 769
+length(which(!is.na(datt$citrulline))==TRUE) # available for citrulline: 776
+length(which(!is.na(datt$crp))==TRUE) # available for crp: 747
+length(which(!is.na(datt$anemia))==TRUE) # available for anemia: 748
+
+length(which(!is.na(datt$plate_igg_igm_duo))==TRUE) # available for duodenal IgGandM: 129
+length(which(!is.na(datt$plate_iga_duo))==TRUE) # available for duodenal IgA: 128
+length(which(!is.na(datt$plate_ige_duo))==TRUE) # available for duodenal Ige: 130
+length(which(!is.na(datt$AAT_duo))==TRUE) # available for duodenal AAT: 139
+length(which(!is.na(datt$cal_duo))==TRUE) # available for duodenal calpro: 187
+
+length(which(!is.na(datt$plate_feces))==TRUE) # available for fecal data Immunoglobulins: 715
+length(which(!is.na(datt$cal_feces))==TRUE) # available for fecal calpro: 732
+length(which(!is.na(datt$AAT_feces))==TRUE) # available for fecal AAT: 783
+
+length(which(!is.na(datt$lm_ratio))==TRUE) # available for lm ratio: 265
+length(which(!is.na(datt$igf_n))==TRUE) # available for igf: 364
+length(which(!is.na(datt$mmu))==TRUE) # available for mmu: 61
+length(which(!is.na(datt$amu))==TRUE) # available for amu: 61
+length(which(!is.na(datt$gmu200))==TRUE) # available for gmu200: 61
+
+# --- univariate analysis with stunting of main variables
+
+t.test(igf_n ~ stunted, data = datt)
+t.test(cal_feces ~ stunted, data = datt)
+t.test(AAT_feces ~ stunted, data = datt)
+t.test(cal_duo ~ stunted, data = datt)
+t.test(cal_feces ~ stunted, data = datt)
+t.test( lm_ratio~ stunted, data = datt)
+t.test( citrulline~ stunted, data = datt) # p-value = 0.0009384
+t.test( valin~ stunted, data = datt) # p-value = 1.085e-06
+t.test( leucine~ stunted, data = datt) # p-value = 1.085e-06
+t.test( isoleucin~ stunted, data = datt) # p-value = 7.947e-05
+t.test( bcaa_geomean~ stunted, data = datt) # p-value = 1.383e-07
+t.test( alanine~ stunted, data = datt) # p-value = ns
+
+t.test( crp~ stunted, data = datt)
+
+chisq.test(datt$calprotectinlevel, datt$stunted)
+chisq.test(datt$AATlevel, datt$stunted)
+
+chisq.test(datt$citrullinelevel, datt$stunted) #p-value = 0.06569
+boxplot(datt$citrulline~datt$stunted)
+
+chisq.test(datt$valine_level, datt$stunted) #p-value = 3.598e-05
+boxplot(datt$valin~datt$stunted)
+
+chisq.test(datt$isoleucine_level, datt$stunted) #p-value = 0.0001877
+boxplot(datt$isoleucin~datt$stunted)
+
+chisq.test(datt$leucine_level, datt$stunted) #p-value = 2.812e-07
+boxplot(datt$leucin~datt$stunted)
+
+boxplot(datt$bcaa_geomean~datt$stunted)
+
+chisq.test(datt$alanine_level, datt$stunted) #p-value = 0.008
+
+datt_stunted<-filter(datt, stunted=="stunted")
+datt_nonstunted<-filter(datt, stunted=="non-stunted")
+
+stunted<-mean(datt_stunted$bcaa_geomean, na.rm=TRUE)
+nonstunted<-mean(datt_nonstunted$bcaa_geomean, na.rm=TRUE)
+log2(stunted/nonstunted) #-0.1306229
+stunted/nonstunted #0.91
+
+stunted<-mean(datt_stunted$valin, na.rm=TRUE)
+nonstunted<-mean(datt_nonstunted$valin, na.rm=TRUE)
+log2(stunted/nonstunted) #-0.1265831
+
+stunted<-mean(datt_stunted$leucin, na.rm=TRUE)
+nonstunted<-mean(datt_nonstunted$leucin, na.rm=TRUE)
+log2(stunted/nonstunted) #-0.1493881
+
+stunted<-mean(datt_stunted$isoleucin, na.rm=TRUE)
+nonstunted<-mean(datt_nonstunted$isoleucin, na.rm=TRUE)
+log2(stunted/nonstunted) #-0.1119716
+
+stunted<-mean(datt_stunted$citrulline, na.rm=TRUE)
+nonstunted<-mean(datt_nonstunted$citrulline, na.rm=TRUE)
+log2(stunted/nonstunted) #-0.1044675
+stunted/nonstunted #0.93
+
+chisq.test(datt$alanine_level, datt$stunted) #p-value = 0.008073
+boxplot(datt$alanine~datt$stunted)
+
+chisq.test(datt$tpi_level, datt$stunted)
+chisq.test(datt$crp_seuil, datt$stunted) #p-value = 0.02464
+boxplot(log(datt$crp)~datt$stunted)
+
+t.test( iga_feces~ stunted, data = datt) # p-value = 0.7968
+boxplot(log(datt$iga_feces)~datt$stunted)
+
+t.test( iga_feces~ stunted, data = datt) # p-value = 0.7968
+boxplot(log(datt$iga_feces)~datt$stunted)
+
+t.test(AAT_feces~ stunted, data = datt) # p-value = 0.7968
+boxplot(log(datt$AAT_feces)~datt$stunted)
+
+t.test(cal_feces~ stunted, data = datt) # p-value = 0.184
+boxplot(log(datt$cal_feces)~datt$stunted)
+
+t.test(igf_n~ stunted, data = datt) # p-value = 0.3168
+boxplot(log(datt$igf_n)~datt$stunted)
+
+
+
+##--- missing data plots
+g1 = finalfit::missing_plot(dat %>% dplyr::filter( pays == "RCA"), title = "Central African Republic" )
+g2 = finalfit::missing_plot( dat %>% dplyr::filter( pays != "RCA"), title = "Madagascar" )
+gridExtra::grid.arrange( g1, g2, ncol = 2)
+
+pdf(width = 10, height = 20, file = "missing_RCA.pdf"); print(g1); dev.off()
+pdf(width = 10, height = 20, file = "missing_Mada.pdf"); print(g2); dev.off()
+
+mp = finalfit::missing_glimpse( datt ) %>% 
+  dplyr::select( label, missing_percent ) %>% 
+  dplyr::mutate( missing_percent = as.numeric( missing_percent)  ) %>%  
+  dplyr::arrange( -missing_percent) %>%
+  dplyr::rename( varible = label, percent_missing = missing_percent )
+
+ tibble::as_tibble(mp) %>% print( n = Inf)
+```
+
+## Potential Outliers (Immuno/Cyto variables)
+
+Before considering potential associations (using correlation plots or regression), we first look for potential outliers. The values below are greater than twice the 99th percentile of each dataset. The `id = upper99` shows the 99th percentile for each variable. Of note: the immunoglobulin data in the feces seems to be pretty variable and much less stable than in the blood.
+
+```{r}
+#-- potential outliers
+rbind.data.frame( high, bads ) %>% knitr::kable()
+write.csv( bads, file = "potential_outliers.csv")
+
+#-- visualization outliers
+gg = ggplot( long %>% dplyr::filter( name %in% name[grepl( "igg", name)] )  ) +
+  geom_col(aes(x = value, y = name, group = id, col = flagged)
+           , position = "dodge" )+
+  # facet_wrap(. ~ flagged)+
+  theme_minimal()+
+  # scale_x_continuous( limits =c(0,40e3)) +
+  theme( legend.position = "none")
+
+###-- to save as a PDF, uncomment the pdf() and dev.off() lines
+ pdf( width = 10, height = 10, file = "outlier_plot.pdf")
+print(gg)
+dev.off()
+```
+
+The following plot shows the first two principle components of the `r nrow(immu_pcoa)` subjects who were not missing any of the fecal or blood immunoglobulin or cytokine observations. 
+
+```{r}
+gg = ggplot( immu_pcoa) + 
+  geom_point(aes(y = PC2, x = PC1, col = flagged, shape = pays ))+
+  # facet_grid(. ~ pays )+
+  theme_minimal()+
+  labs( col = "Potential Outlier", shape = "Country")
+pdf( width = 3, height = 5, file = "outlier_pcoa.pdf")
+print(gg)
+dev.off()
+```
+
+## PC plots of cytokine variables
+
+
+What if we look only at the cytokines in the blood? These data is only available for Madagascar and there seems to be no major shift in the overall profile of cytokines 
+
+```{r}
+vars  =  blood_cytos 
+prefix = gsub(pattern = "_blood", "", vars) %>% unique()
+small = datt %>% 
+  dplyr::select(id, vars, pays, haz ) %>% 
+  non_missing( controls = vars )  %>% 
+  tidyr::pivot_longer( cols = vars) %>%
+  tidyr::separate( col = "name", sep = "_", into = c("cyto","comp") ) %>%
+    unique() %>%
+  tidyr::pivot_wider( id_cols = c(id, pays, haz , comp )
+                      , values_from = value, names_from = c(cyto ) ) %>%
+  make_pca_vars( amp_vars = prefix, normer = NULL)
+
+gg = ggplot(small) + 
+  geom_point(aes(y = PC2, x = PC1, col = haz, shape = pays )
+             , alpha = 0.5 )+
+  facet_grid(. ~ comp ) +
+  theme_minimal() +
+  scale_colour_viridis_d( end = .5, direction = -1, option = "C") + 
+  labs( title = paste("Principle Components (n =", lunique(small$id),")")
+        , subtitle = "Blood Cytokine Variables")
+
+pdf( width = 5, height = 5, file = "Bloodcytokinesstunted.pdf")
+print(gg)
+dev.off()
+
+```
+
+Look at immunoglobulins in all three compartments and then in compartments two-by-two
+
+```{r}
+immus_red <- c('igg1_blood', 'igg1_duo', 'igg1_feces', 'igg2_blood', 'igg2_duo', 'igg2_feces', 'igg3_blood', 'igg3_duo', 'igg3_feces', 'igg4_blood', 'igg4_duo', 'igg4_feces', 'igm_blood', 'igm_duo', 'igm_feces', 'iga_blood', 'iga_duo','iga_feces')
+
+vars   = immus_red
+prefix = gsub(pattern = "_feces|_blood|_duo", "", vars) %>% unique()
+
+small = datt %>% 
+  dplyr::select(id, vars, pays, haz ) %>% 
+  non_missing( controls = vars )  %>% 
+  tidyr::pivot_longer( cols = vars) %>%
+  tidyr::separate( col = "name", sep = "_", into = c("immus_red","comp") ) %>%
+  unique() %>%
+  tidyr::pivot_wider( id_cols = c(id, pays, haz , comp )
+                      , values_from = value, names_from = c(immus_red) ) %>%
+  make_pca_vars( amp_vars = prefix, normer = NULL)
+
+gg = ggplot(small) + 
+  geom_point(aes(y = PC2, x = PC1, col = pays, shape = haz )
+             , alpha = 0.5 )+
+  facet_grid(. ~ comp ) +
+  theme_minimal() +
+  scale_colour_viridis_d( end = .5, direction = -1, option = "C") + 
+  labs( title = paste("Principle Components (n =", lunique(small$id),")")
+        , subtitle = "Blood, duodenal and fecal Immunoglobulin Variables")
+
+print(gg)
+
+gg2 = ggplot(small) + 
+  geom_point(aes(y = PC2, x = PC1, col = pays, shape = comp )
+             , alpha = 0.5 )+
+  theme_minimal() +
+  scale_colour_viridis_d( end = .5, direction = -1, option = "C") + 
+  labs( title = paste("Principle Components (n =", lunique(small$id),")")
+        , subtitle = "Comparison of blood, duodenal and fecal Immunoglobulin Variables")
+
+print(gg2)
+
+# now take out the outliers and plot again
+
+datt2 <- subset(datt, (datt$id%in% bad_ids)==FALSE)
+
+nrow(datt)
+nrow(datt2)
+
+small2 = datt2 %>% 
+  dplyr::select(id, vars, pays, haz ) %>% 
+  non_missing( controls = vars )  %>% 
+  tidyr::pivot_longer( cols = vars) %>%
+  tidyr::separate( col = "name", sep = "_", into = c("immus_red","comp") ) %>%
+  unique() %>%
+  tidyr::pivot_wider( id_cols = c(id, pays, haz , comp )
+                      , values_from = value, names_from = c(immus_red) ) %>%
+  make_pca_vars( amp_vars = prefix, normer = NULL)
+
+
+gg3 = ggplot(small2) + 
+  geom_point(aes(y = PC2, x = PC1, col = comp, shape = pays )
+             , alpha = 0.5 )+
+  theme_minimal() +
+  scale_colour_viridis_d( end = .5, direction = -1, option = "C") + 
+  labs( title = paste("Principle Components (n =", lunique(small2$id),")")
+        , subtitle = "Comparison of blood, duodenal and fecal Immunoglobulin Variables")
+
+pdf( width = 5, height = 5, file = "Immunoglobulinsbycompartments.pdf")
+print(gg3)
+dev.off()
+
+immus_red_noduod=c('igg1_blood',  'igg1_feces', 'igg2_blood', 'igg2_feces', 'igg3_blood', 'igg3_feces', 'igg4_blood',  'igg4_feces', 'igm_blood',  'igm_feces', 'iga_blood', 'iga_feces')
+
+vars   = immus_red_noduod
+prefix2 = gsub(pattern = "_feces|_blood", "", vars) %>% unique()
+
+
+small3 = datt2 %>% 
+  dplyr::select(id, vars, pays, haz ) %>% 
+  non_missing( controls = vars )  %>% 
+  tidyr::pivot_longer( cols = vars) %>%
+  tidyr::separate( col = "name", sep = "_", into = c("immus_red_noduod","comp") ) %>%
+  unique() %>%
+  tidyr::pivot_wider( id_cols = c(id, pays, haz , comp )
+                      , values_from = value, names_from = c(immus_red_noduod) ) %>%
+  make_pca_vars( amp_vars = prefix2, normer = NULL)
+
+gg4 = ggplot(small3) + 
+  geom_point(aes(y = PC2, x = PC1, col = pays, shape = comp )
+             , alpha = 0.5 )+
+  theme_minimal() +
+  scale_colour_viridis_d( end = .5, direction = -1, option = "C") + 
+  labs( title = paste("Principle Components (n =", lunique(small3$id),")")
+        , subtitle = "Comparison of blood and fecal Immunoglobulin Variables")
+
+pdf( width = 5, height = 5, file = "BloodFecesImmunoglobulinsPCA.pdf")
+print(gg4)
+dev.off()
+
+immus_red_fecesduod=c('igg1_duo',  'igg1_feces', 'igg2_duo', 'igg2_feces', 'igg3_duo', 'igg3_feces', 'igg4_duo',  'igg4_feces', 'igm_duo',  'igm_feces', 'iga_duo', 'iga_feces')
+
+vars   = immus_red_fecesduod
+prefix2 = gsub(pattern = "_feces|_duo", "", vars) %>% unique()
+
+
+small4 = datt2 %>% 
+  dplyr::select(id, vars, pays, haz ) %>% 
+  non_missing( controls = vars )  %>% 
+  tidyr::pivot_longer( cols = vars) %>%
+  tidyr::separate( col = "name", sep = "_", into = c("immus_red_fecesduod","comp") ) %>%
+  unique() %>%
+  tidyr::pivot_wider( id_cols = c(id, pays, haz , comp )
+                      , values_from = value, names_from = c(immus_red_fecesduod) ) %>%
+  make_pca_vars( amp_vars = prefix2, normer = NULL)
+
+gg5 = ggplot(small4) + 
+  geom_point(aes(y = PC2, x = PC1, col = comp, shape = pays )
+             , alpha = 0.5 )+
+  theme_minimal() +
+  scale_colour_viridis_d( end = .5, direction = -1, option = "C") + 
+  labs( title = paste("Principle Components (n =", lunique(small4$id),")")
+        , subtitle = "Comparison of blood and duodenal Immunoglobulin Variables")
+
+pdf( width = 5, height = 5, file = "DuodenumFecesImmunoglobulinsPCA.pdf")
+print(gg5)
+dev.off()
+
+```
+Look at immunoglobulins in each compartment and stunting
+
+```{r}
+immus_red_blood <- c('igg1_blood',  'igg2_blood',  'igg3_blood',  'igg4_blood', 'igm_blood',  'iga_blood')
+
+
+vars   = immus_red_blood
+prefix2 = gsub(pattern = "_blood", "", vars) %>% unique()
+
+
+small3 = datt2 %>% 
+  dplyr::select(id, vars, pays, haz ) %>% 
+  non_missing( controls = vars )  %>% 
+  tidyr::pivot_longer( cols = vars) %>%
+  tidyr::separate( col = "name", sep = "_", into = c("immus_red_blood","comp") ) %>%
+  unique() %>%
+  tidyr::pivot_wider( id_cols = c(id, pays, haz , comp )
+                      , values_from = value, names_from = c(immus_red_blood) ) %>%
+  make_pca_vars( amp_vars = prefix2, normer = NULL)
+
+gg4 = ggplot(small3) + 
+  geom_point(aes(y = PC2, x = PC1, col = haz, shape = pays )
+             , alpha = 0.5 )+
+  theme_minimal() +
+  scale_colour_viridis_d( end = .5, direction = -1, option = "C") + 
+  labs( title = paste("Principle Components (n =", lunique(small3$id),")")
+        , subtitle = "Comparison of blood Immunoglobulin Variables according to stunting")
+
+pdf( width = 5, height = 5, file = "BloodImmunoglobulinsPCAstunted.pdf")
+print(gg4)
+dev.off()
+
+immus_red_feces=c( 'igg1_feces', 'igg2_feces',  'igg3_feces',   'igg4_feces',   'igm_feces',  'iga_feces')
+
+vars   = immus_red_feces
+prefix2 = gsub(pattern = "_feces", vars) %>% unique()
+
+
+small4 = datt2 %>% 
+  dplyr::select(id, vars, pays, haz ) %>% 
+  non_missing( controls = vars )  %>% 
+  tidyr::pivot_longer( cols = vars) %>%
+  tidyr::separate( col = "name", sep = "_", into = c("immus_red_feces","comp") ) %>%
+  unique() %>%
+  tidyr::pivot_wider( id_cols = c(id, pays, haz , comp )
+                      , values_from = value, names_from = c(immus_red_feces) ) %>%
+  make_pca_vars( amp_vars = prefix2, normer = NULL)
+
+gg5 = ggplot(small4) + 
+  geom_point(aes(y = PC2, x = PC1, col = haz, shape = pays )
+             , alpha = 0.5 )+
+  theme_minimal() +
+  scale_colour_viridis_d( end = .5, direction = -1, option = "C") + 
+  labs( title = paste("Principle Components (n =", lunique(small4$id),")")
+        , subtitle = "Fecal Immunoglobulin Variables by stunting")
+
+pdf( width = 5, height = 5, file = "FecesImmunoglobulinsPCAstunted.pdf")
+print(gg5)
+dev.off()
+
+immus_red_duo=c( 'igg1_duo', 'igg2_duo',  'igg3_duo',   'igg4_duo',   'igm_duo',  'iga_duo')
+
+vars   = immus_red_duo
+prefix2 = gsub(pattern = "_duo", vars) %>% unique()
+
+
+small4 = datt2 %>% 
+  dplyr::select(id, vars, pays, haz ) %>% 
+  non_missing( controls = vars )  %>% 
+  tidyr::pivot_longer( cols = vars) %>%
+  tidyr::separate( col = "name", sep = "_", into = c("immus_red_duo","comp") ) %>%
+  unique() %>%
+  tidyr::pivot_wider( id_cols = c(id, pays, haz , comp )
+                      , values_from = value, names_from = c(immus_red_duo) ) %>%
+  make_pca_vars( amp_vars = prefix2, normer = NULL)
+
+gg5 = ggplot(small4) + 
+  geom_point(aes(y = PC2, x = PC1, col = haz, shape = pays )
+             , alpha = 0.5 )+
+  theme_minimal() +
+  scale_colour_viridis_d( end = .5, direction = -1, option = "C") + 
+  labs( title = paste("Principle Components (n =", lunique(small4$id),")")
+        , subtitle = "Duodenal Immunoglobulin Variables by stunting")
+
+pdf( width = 5, height = 5, file = "DuodenumImmunoglobulinsPCAstunted.pdf")
+print(gg5)
+dev.off()
+
+```
+
+```
+
+## Associations among Biomarkers (Immuno, Cytokines) 
+
+Visualization of two-way associations (among the same biomarker, across compartments) using Spearman correlations. To better see the associations, we remove the potential outliers flagged earlier. 
+
+After adjusting the p-values for multiple comparisons (within a compartment), none of the associations is statistically significant.
+
+```{r, fig.height = 50, fig.width = 8}
+prefix = c(immus, blood_cytos) %>% 
+  lapply( FUN = function(x) strsplit(x, split = "_")[[1]][1]) %>% 
+  unlist() %>% 
+  unique() %>% 
+  sort()
+
+k = 0; out = NULL; gg =list()
+for( j in prefix){
+for( comp in c("blood","duo")){
+  # j = prefix[24]; comp = "duo"
+  temp = immu_dat %>% 
+    dplyr::select(id, dplyr::contains( j ), haz ) %>%
+    # dplyr::mutate( flagged = (id %in% bad_ids) )
+    dplyr::filter( !id %in% bad_ids )
+  # colnames(temp)
+ 
+  
+  ycol = paste0( j, "_feces")
+  xcol = paste0( j, "_", comp)
+
+  if( sum( c(ycol, xcol) %in% colnames(temp) ) == 2 ){   
+    k = k + 1 
+    
+  varr = paste0(j, "_", c( comp ,"feces"))
+  smm = temp[, varr ] %>% non_missing( controls = varr) %>% as.matrix()
+ 
+  smm = cbind.data.frame( pval = cor.test( smm[,1], smm[,2]
+                          , method = "spearman")$p.value
+                          , name = j
+                          , comp = comp )
+  out = rbind.data.frame( out, smm )
+  
+   gg[[k]] = ggpubr::ggscatter( temp
+                     , x =  xcol
+                     , y =  ycol
+                     , add = "reg.line"
+                     , cor.method = "spearman"
+                     , conf.int = TRUE
+                     , cor.coef = TRUE 
+                     , color = "grey44") + 
+   # gg[[k]] =  ggplot( temp ) +
+   #    geom_point(aes_string( y = ycol, x = xcol
+   #                           # , col = "flagged"
+   #                           ), alpha = 0.5 )+
+      scale_color_viridis_d( end = .9, direction = -1) + 
+      theme_minimal()+ 
+      theme(legend.position = "none")
+  }# end plot
+}# end loop
+}# end loop
+
+out %>%
+  dplyr::group_by( comp) %>% 
+  dplyr::mutate(padj = p.adjust( pval, method = "BH")) %>%
+  dplyr::arrange( padj ) %>% 
+  dplyr::filter( padj < .10 ) %>% 
+  print(n = Inf) 
+
+p = 2
+gridExtra::marrangeGrob( gg , ncol = p, nrow = 5)
+```
+
+## Relationship between Stunting and AAT, Calprotectine, Ferritine, CRP, Citrulline, Igf
+## Stunting and Inflammation
+
+## Binary associations between Cytokines, Immunoglobulins and stunting
+
+The following tables are organized by country of origin. 
+
+**Note on p-values** For categorical or binary variables (such as the pathogen presence/absence variables), p-values are from a Chi-Squared test of independence. For continuous variables, p-values are from a Wilcoxon rank sum test. This analysis does not consider any controls (such as sex or age).
+
+```{r, results = "asis"}
+
+non_duo_immus_red = c( 'iga_feces', 'iga_blood', 'ige_blood', 'igg1_blood', 'igg1_feces', 'igg2_blood', 'igg2_feces', 'igg3_blood', 'igg3_feces', 'igg4_blood', 'igg4_feces', 'igm_blood', 'igm_feces')
+
+form = paste("~ "
+  , paste0( non_duo_immus_red, collapse = " + "), "| stunted") %>% 
+  as.formula()
+
+for( country in c("RCA","Madagascar")){# country = "RCA"
+gg = table1::table1( data = datt %>% dplyr::filter( pays == country ) 
+           , form 
+           , overall = FALSE
+           , extra.col = list( `P-value` = pvalue_table1 )
+           , caption = paste("Data in", country) )
+print(gg)
+}
+
+#-- for the duodenal variables
+
+form = paste("~ "
+  , paste0( duo_immus, collapse = " + "), "| haz") %>% 
+  as.formula()
+
+for( country in c("RCA","Madagascar")){
+gg = table1::table1( data = datt %>% dplyr::filter( haz != "non-stunted" 
+                                                    & pays == country)
+       , form 
+       , overall = FALSE
+       , extra.col = list( `P-value` = pvalue_table1)
+       , caption = paste("Data in", country, "(excluding non-stunted children)")
+                  )
+print(gg)
+}# end loop
+
+#-- for the blood cytokines
+
+form = paste("~ "
+  , paste0( blood_cytos, collapse = " + "), "| stunted") %>% 
+  as.formula()
+
+for( country in c("Madagascar")){# country = "RCA"
+gg = table1::table1( data = datt %>% dplyr::filter( pays == country ) 
+           , form 
+           , overall = FALSE
+           , extra.col = list( `P-value` = pvalue_table1 )
+           , caption = paste("Data in", country) )
+print(gg)
+}# end loop
+
+# now control for co-factors for the significantly associated variables
+
+controls = c("age","sex","ige_blood","il2r_blood", "vegf_blood", "mig_blood", "pays")
+fec = datt  %>% non_missing( controls = controls )
+
+mod = lm( haz_cont ~ age + sex + ige_blood+ il2r_blood+ vegf_blood+ mig_blood
+          , data = fec )
+nice_print( mod )
+
+many_interactions( mod = mod
+                   , elas_data = fec
+                   , pred_x = c("ige_blood", "il2r_blood", "vegf_blood", "mig_blood")
+                   , cat_z = "sex")
+
+```
+
+
+**Statistical Analysis** Here we fit a linear model to the height-for-age z-score on fecal samples, where the covariates are the inflammation variables (AAT_feces, cal_feces), age, sex, and country of origin. 
+
+**Initial Findings** No effects are significant except for citrulline
+
+
+```{r, results = "asis"}
+controls = c("age","sex","pays","AAT_feces","cal_feces", "citrulline", "pays", "valin", "alanin", "isoleucin", "leucin")
+fec = datt  %>% non_missing( controls = controls )
+
+mod = lm( haz_cont ~ age + sex + pays *( log10(AAT_feces) + log10(cal_feces) + citrulline + valin + alanin + isoleucin + leucin )
+          , data = fec )
+nice_print( mod )
+
+many_interactions( mod = mod
+                   , elas_data = fec
+                   , pred_x = c("AAT_feces", "cal_feces", "citrulline", "alanine", "leucin", "isoleucin", "valin" )
+                   , cat_z = "sex")
+```
+
+now we also control taking into account anemia
+
+```{r, results = "asis"}
+controls = c("age","sex","pays","AAT_feces","cal_feces","haz", "anemia", "valin", "alanine", "isoleucin", "leucin")
+fec = datt  %>% non_missing( controls = controls )
+
+mod = lm( haz_cont ~ age + sex + anemia + pays *( log10(AAT_feces) + log10(cal_feces) + crp + citrulline + ferritine +valin + alanine + isoleucin + leucin)
+          , data = fec )
+nice_print( mod )
+
+many_interactions( mod = mod
+                   , elas_data = fec
+                   , pred_x = c("AAT_feces", "cal_feces", "crp", "igf_n", "citrulline", "ferritine", "alanine", "leucin", "isoleucin", "valin" )
+                   , cat_z = "anemia")
+```
+
+## Differences in Stunting across Biomarkers (Immuno, Cytokines) 
+
+**Statistical Approach** Next we examine linear models with a few standard controls (age, sex, country of origin, season, sda and anemia) and look at the associations (and p-values) with each biomarker, one-at-a-time. We adjust the p-values for multiple comparisons using Benjamin-Hochberg. This analysis will help us see what associations are still worth exploring. 
+
+Here we consider the immunoglobulin and cytokine variables.
+
+**Initial Findings** Among the biomarkers, only ige_blood, VEGF and IL2r have (unadjusted) p-values less than 0.05 but only IgE remains significant after multiple testing. 
+
+```{r, eval = TRUE }
+
+controls = c( "age", "sex", "sda", "saison"
+              , "hemoglobine")
+ttt  = NULL
+
+igf = c("igf_n")
+
+varrs = unique( c(immus, blood_cytos, igf) )
+
+for ( varr in varrs ){ 
+
+#-- filtering to non-missing
+small = datt %>% non_missing( c(controls, varr))
+#-- in case country is all the same
+bad = ifelse( (small$pays %>% unique() %>% length() )  <  2
+              , " + ", " + pays + ")
+
+form = formula( paste0( "haz_cont ~ "
+                        , paste0( controls, collapse = " + ")
+                        , bad , varr ))
+mod = lm( data = small, formula = form )
+tt  = mod %>% 
+  summary %$% 
+  coefficients[ , c('Estimate','Pr(>|t|)')] 
+tt = tt[ nrow(tt), ] %>% 
+  t() %>% 
+  data.frame() %>% 
+  dplyr::mutate( variable = varr ) %>%
+  dplyr::rename( pval = Pr...t.. )
+
+ttt = rbind.data.frame( ttt, tt )
+ #summary(mod)
+}
+
+#nice_print( mod ); summary(mod)
+#--- from here, it seems only ige_blood is significantly associated
+ttt %>% 
+  dplyr::mutate( padj = stats::p.adjust(p = pval, method = "BH")
+                 , sig = padj < 0.05 
+                 , Estimate = signif( Estimate, 3) ) %>%
+  dplyr::arrange( pval, -sig ) %>%
+  # dplyr::arrange( - sig ) %>% 
+  tibble::as_tibble() %>% 
+  print( n = Inf)
+
+```
+
+The scatterplots between those variables and `haz_cont` suggest that the association with `IgE_blood`may have a meaningful association. 
+
+```{r}
+
+#-- worth exploring (unadjusted p-value < 0.05 )
+these = ttt[ttt$pval < 0.05, "variable"] %>% unlist()
+gg = list(); hh = list(); k = 0
+
+for(j in these){ # j = these[1]
+  k = k + 1
+  
+  temp = datt %>% 
+    dplyr::select( id, sex, pays, all_of(j), haz_cont, stunted, haz ) %>%
+    dplyr::mutate( flagged = (id %in% bad_ids))
+  
+  gg[[k]] = ggplot( temp ) + 
+    geom_point(aes_string(x = j, y = "haz_cont", col = "pays")) +
+    geom_smooth( aes_string(x = j, y = "haz_cont")
+                 , method = "lm", alpha = 0.5) +
+    theme_minimal()+
+    theme( legend.position = "top")
+  
+  hh[[k]] = ggplot( temp ) +
+    geom_boxplot( aes_string(y = paste0("sqrt(",j ,")")
+                           , x = "haz", fill = "haz")) +
+    theme_minimal()+ 
+    theme( legend.position = "none")
+}#end loop
+
+gridExtra::marrangeGrob( hh, ncol = 4, nrow = 1)
+
+gridExtra::marrangeGrob( gg, ncol = 4, nrow = 1)
+
+```
+
+
+**Statistical Approach** Next we construct bootstrapped datasets and regress `haz_cont` on the same controls along with biomarkers from the same compartment (e.g. blood, feces, duodenal). We also repeat the analysis with the potential outliers and without them. 
+
+Because there are only 64 observations with all of the blood cytokine variables measured, we make two models, one with all and one having instead only consider IgA, IgE, and Igg1 through Igg4, IgM, which have more than 600 available observations. 
+
+**Initial Analysis  **
+
+With the blood variables, only`ige_blood` is statistically significant, with higher values associated with lower `haz_cont` scores. This finding is consistent whether or not the outliers are removed.
+
+A bootstrap analysis suggests that increases in `ige_blood` is significantly associated with lower `haz_cont`, controlling for the other controls and fecal variables. 
+
+
+
+```{r, results = "asis" }
+
+set.seed(81053)
+
+controls = c( "age", "sex", "sda", "saison"
+              , "hemoglobine")
+
+for( comp in c("feces", "duo", "blood")){ # comp = "blood"; comp = "duo"; comp = "feces"
+
+  
+##--- linear regression (compartment specific)
+immu_controls =  immus[ grepl( comp , immus )]
+
+if (comp != "feces"){ # duodenal and blood have only values in one country
+  interact = "+ ("
+} else interact = "+ pays + ("
+
+all_controls = c(controls, immu_controls )
+form  = formula( paste(
+  c("haz_cont ~ "
+    , paste0( controls, collapse = "+")
+                 , interact 
+                 , paste0( immu_controls, collapse = "+")
+                 , ")"), collapse  = " ") )
+
+for (include_outlier in c(FALSE, TRUE) ) { # include_outlier = TRUE
+
+small = dat %>% non_missing( controls = all_controls) %>%
+  dplyr::select( all_of( c("haz_cont", all_controls, "pays", "id" ) ))
+
+if (include_outlier == FALSE) small = small %>% dplyr::filter( !id %in% bads$id)
+
+mod   = lm( formula = form, data = small)
+print( paste("including outliers:", include_outlier ) )
+nice_print( mod )
+# mod %>% summary() %>% print()
+
+}# end outlier
+
+#-- corrplot
+tt = small %>% dplyr::select( all_of( immu_controls ) ) %>% cor( method = "spearman")
+corrplot::corrplot( tt )
+
+#--- bootstrapping
+pint = bootstrap_coef( small = small, form = form, times = 2000 )
+gg   = plot_bootstrap( pint )
+print(gg)
+}
+
+```
+
+## Association between AAT and Calprotectine in different compartments
+
+**Statistical Approach** We regress each biomarker in the feces with its counterpart in the duodenum, controlling for age, sex, and country of origin. We allow for an interaction effect with country of origin. To aim for residuals that are normally distributed, we take a square-root transformation of AAT, and we take a logarithm-transformation for calprotectine.
+
+**Initial Findings** There is no association between calprotectine measured in the feces and calprotectine measured in the duodenum (p-value > 0.10), whether we use no transformation, a square-root, or a logarithm transformation.
+
+Depending on the transformation, there either is or is not a statistically significant association between AAT measured in the feces and in the duodenum. What makes this analysis challenging is that nearly 33% of the AAT_duodenal values are at or below the detection limit. 
+
+If we take these values as they are and use the original scale, there is a statistically significant association (that differs between countries) between AAT in the feces and AAT in the duodenum. However, if we take a logarithm or square-root transformation, the effect is no longer significant (p-values > 0.05). 
+
+The Spearman correlation between AAT measured in the feces and AAT measured in the duodenum is not significant (p-value = 0.82). 
+
+
+```{r aat, results = "asis"}
+for( biomark in c("AAT","calprotectine")){ # biomark = "AAT"
+  
+  if ( biomark == "AAT" ) { 
+    controls = c("AAT_duo","AAT_feces")
+    form = formula(  sqrt(AAT_feces) ~ pays* (sex + age +  sqrt(AAT_duo)))
+    yvar = "AAT_feces"
+    xvar = "AAT_duo"
+  } else {
+     controls = c("cal_duo","cal_feces")
+    form = formula( log10(cal_feces) ~ pays* (sex + age +  log10(cal_duo)))
+    yvar = "cal_feces"
+    xvar = "cal_duo"
+    
+  }
+  
+  
+small = datt %>% dplyr::select( id, pays, sex
+                                , stunted, AAT_duo, AAT_feces, age, anemia
+                                , cal_feces, cal_duo ) %>%
+  dplyr::filter( AAT_duo > 0 ) %>%
+  non_missing( controls = controls  ) %>%
+  dplyr::mutate( ageyears = dplyr::case_when( age <= 36 ~ "(0-3]"
+                                            , age <= 48 ~ "(3-4]"
+                                            , age > 48 ~ "(4-6]")) %>%
+  dplyr::mutate( aat_small = ( AAT_duo <= 0.012))
+
+# table(small$pays)
+mod = lm( formula = form, data = small)
+nice_print(mod) # summary(mod)
+ # print( summary(mod) ) ; residuals( mod) %>% hist(); qqnorm( residuals(mod))
+pint = bootstrap_coef( small = small, form = form )
+plot_bootstrap( pint ) +
+  labs( title = paste("Bootstrap Analysis of", biomark) )
+
+gg = ggpubr::ggscatter( data = small
+                   , x = xvar, y = yvar
+                   , cor.method = "spearman"
+                   , add = "reg.line"
+                     , conf.int = TRUE
+                     , cor.coef = TRUE)
+
+print(gg)
+}# end loop
+
+```
+
+
+## Complete-Case Analysis (AAT, Citrulline, Hemoglobine, etc.)
+
+To check if the statistical significant effects appear in the dataset, we consider fitting a linear model with only the complete-case data. 
+
+As shown in the table of non-missing observations (below), of the original 806 observations, 608 are non-missing for AAT_feces, citrulline, ferritine, and hemoglobine and 583 for AAT_feces, cal_feces, citrulline, crp, ferritine, hemoglobine
+
+```{r}
+controls = c("citrulline","hemoglobine","AAT_feces"
+             ,"ferritine", "crp", "cal_feces", "valin", "leucin", "isoleucin")
+missing_size( dat, controls = controls ) %>% print( n = Inf)
+
+controls2 = c("citrulline","hemoglobine","AAT_feces"
+             ,"ferritine", "crp", "cal_feces", "igf_n", "valin", "leucin", "isoleucin")
+missing_size( dat, controls = controls2 ) %>% print( n = Inf)
+
+
+```
+
+## Associations between Biomarkers as well as with stunting
+
+**Statistical Approach** We consider the biomarkers: citrulline, fertitine, crp, and logarithm-transformed AAT_feces (`AATmggdePS`) and cal_feces (`CALPROTECTINEggdePS`). 
+In a seperate model, we consider in addition also Igf.
+
+We regress each biomarker on the controls: age, sex, sda, season, cough, runny nose, stuffy nose,  country of origin, hemoglobin and the remaining biomarkers. To test for robustness, we consider 1000 bootstrap datasets. In this analysis, we do not include an interaction with country of origin.  
+
+### Initial Findings (Biomarkers and Stunting)
+
+We present the linear regression and the plots of predicted values across biomarkers excluding AA ramefiés
+
+
+```{r, results = "asis", fig.width = 10, fig.height = 13 }
+##----
+controls = c( "age", "sex", "sda", "saison", "hemoglobine")
+biomarks = c("haz_cont", "ferritine", "citrulline"
+             ,"crp","log_AAT","log_cal", "ige_blood" )
+
+small = dat %>% 
+  non_missing( controls = c("cal_feces", "crp", "ferritine"
+                            ,"citrulline","AAT_feces")) %>%
+  dplyr::mutate( log_cal = log10( cal_feces)
+                 , log_AAT = log10( AAT_feces ) )
+
+set.seed(83150832)
+outt = NULL 
+
+bootplot = list()
+i = 0
+for (biomark in biomarks){ 
+  i = i + 1 
+  # biomark = biomarks[1]; biomark = "log_AAT"; biomark = "log_cal"
+  
+  if( biomark %in% c("log_AAT" ,"log_cal", "ige_blood")){
+    controlz = c(controls, c("ascaris","trichuris"
+                             , "num_genes"
+    ) ) 
+  } else{
+    controlz = controls 
+  }
+  
+  tiny = small %>% non_missing( controls = controlz )
+  
+  others = setdiff( biomarks, biomark)
+  form   = formula( paste0( biomark, "~"
+                            , paste0( controlz, collapse = "+")
+                            # , "+ pays * ("
+                            , "+ pays + ("
+                            , paste0( others, collapse = "+")
+                            , ")"))
+  
+  modd = lm( formula = form, data = tiny )
+  nice_print( modd )
+  # print( biomark )
+  # print( summary(modd))
+  
+  ##-- storing p-values 
+  out = (modd %>% summary() %$% coefficients)[, 4] %>% 
+    data.frame() %>%
+    tibble::rownames_to_column( var = "term") %>%
+    dplyr::mutate( y = biomark )
+  
+  outt = rbind.data.frame( outt, out )
+  write.csv(outt, "associations.csv")
+  
+  #--- bootstrapping 
+  pint = bootstrap_coef(small = tiny, form = form, times = 1000)
+  bootplot[[i]]   = plot_bootstrap( pint ) +
+    labs(title = paste("Bootstrap Estimates\nRegression on", biomark)
+         , subtitle = paste("Sample size =", nrow(tiny)))
+  
+  ##--- plot predictions as a panel.
+  gg = many_interactions(mod = modd, elas_data = tiny
+                         , pred_x = others # multiple ones
+                         , cat_z = "saison" )
+  
+  #-- as a panel
+  do.call( gridExtra::grid.arrange, gg)
+  
+  
+  
+}# end biomarker loop
+```
+
+### Sensitivity Test 
+
+Here are the bootstrap plots of significant variables. If a variable is statistically significant in the bootstrap samples, but not in the full analysis, we do not count it as statistically significant. 
+
+```{r, fig.height = 6, fig.width = 7 }
+bootplot 
+```
+
+
+We present the linear regression and the plots of predicted values across biomarkers including AA ramefiés
+
+
+```{r, results = "asis", fig.width = 10, fig.height = 13 }
+##----
+controls = c( "age", "sex", "sda", "saison",  "hemoglobine")
+biomarks = c("haz_cont", "ferritine", "citrulline", "bcaa_geomean"
+             ,"crp","log_AAT","log_cal", "ige_blood" )
+
+small = dat %>% 
+  non_missing( controls = c("cal_feces", "crp", "ferritine"
+       ,"citrulline","AAT_feces")) %>%
+  dplyr::mutate( log_cal = log10( cal_feces)
+               , log_AAT = log10( AAT_feces ) )
+
+set.seed(83150832)
+outt = NULL 
+
+bootplot = list()
+i = 0
+for (biomark in biomarks){ 
+i = i + 1 
+  # biomark = biomarks[1]; biomark = "log_AAT"; biomark = "log_cal"
+
+  if( biomark %in% c("log_AAT" ,"log_cal", "ige_blood")){
+    controlz = c(controls, c("ascaris","trichuris"
+                              , "num_genes"
+                             ) ) 
+  } else{
+    controlz = controls 
+  }
+
+  tiny = small %>% non_missing( controls = controlz )
+
+  others = setdiff( biomarks, biomark)
+  form   = formula( paste0( biomark, "~"
+                            , paste0( controlz, collapse = "+")
+                            # , "+ pays * ("
+                               , "+ pays + ("
+                            , paste0( others, collapse = "+")
+                            , ")"))
+  
+  modd = lm( formula = form, data = tiny )
+  nice_print( modd )
+  # print( biomark )
+  # print( summary(modd))
+  
+  ##-- storing p-values 
+  out = (modd %>% summary() %$% coefficients)[, 4] %>% 
+    data.frame() %>%
+    tibble::rownames_to_column( var = "term") %>%
+    dplyr::mutate( y = biomark )
+  
+  outt = rbind.data.frame( outt, out )
+  write.csv(outt, "associations.csv")
+
+  #--- bootstrapping 
+pint = bootstrap_coef(small = tiny, form = form, times = 1000)
+bootplot[[i]]   = plot_bootstrap( pint ) +
+  labs(title = paste("Bootstrap Estimates\nRegression on", biomark)
+       , subtitle = paste("Sample size =", nrow(tiny)))
+
+##--- plot predictions as a panel.
+gg = many_interactions(mod = modd, elas_data = tiny
+                  , pred_x = others # multiple ones
+                  , cat_z = "saison" )
+
+#-- as a panel
+do.call( gridExtra::grid.arrange, gg)
+
+
+
+}# end biomarker loop
+```
+
+### Sensitivity Test 
+
+Here are the bootstrap plots of significant variables. If a variable is statistically significant in the bootstrap samples, but not in the full analysis, we do not count it as statistically significant. 
+
+```{r, fig.height = 6, fig.width = 7 }
+bootplot 
+```
+
+We present the linear regression and the plots of predicted values across biomarkers including also Igf and ramefied AA
+
+
+```{r, results = "asis", fig.width = 10, fig.height = 13 }
+##----
+controls = c( "age", "sex", "sda", "saison", "hemoglobine")
+biomarks = c("haz_cont", "ferritine", "citrulline", "bcaa_geomean"
+             ,"crp","log_AAT","log_cal", "igf_n" )
+
+small = dat %>% 
+  non_missing( controls = c("haz_cont", "ferritine", "citrulline", "bcaa_geomean"
+             ,"crp","log_AAT","log_cal", "igf_n" )) %>%
+  dplyr::mutate( log_cal = log10( cal_feces)
+                 , log_AAT = log10( AAT_feces ) )
+
+set.seed(83150832)
+outt = NULL 
+
+colnames(small)
+
+bootplot = list()
+i = 0
+for (biomark in biomarks){ 
+  i = i + 1 
+   #biomark = biomarks[1]; biomark = "log_AAT"; biomark = "log_cal"
+  
+  if( biomark %in% c("log_AAT" ,"log_cal", "ige_blood")){
+    controlz = c(controls, c( "num_genes"
+    ) ) 
+  } else{
+    controlz = controls 
+  }
+  
+  tiny = small %>% non_missing( controls = controlz )
+  
+  others = setdiff( biomarks, biomark)
+  form   = formula( paste0( biomark, "~"
+                            , paste0( controlz, collapse = "+")
+                            # , "+ pays * ("
+                            , "+ ("
+                            , paste0( others, collapse = "+")
+                            , ")"))
+  
+  modd = lm( formula = form, data = tiny )
+  nice_print( modd )
+  # print( biomark )
+  # print( summary(modd))
+  
+  ##-- storing p-values 
+  out = (modd %>% summary() %$% coefficients)[, 4] %>% 
+    data.frame() %>%
+    tibble::rownames_to_column( var = "term") %>%
+    dplyr::mutate( y = biomark )
+  
+  outt = rbind.data.frame( outt, out )
+  write.csv(outt, "associations2.csv")
+  
+  #--- bootstrapping 
+  pint = bootstrap_coef(small = tiny, form = form, times = 1000)
+  bootplot[[i]]   = plot_bootstrap( pint ) +
+    labs(title = paste("Bootstrap Estimates\nRegression on", biomark)
+         , subtitle = paste("Sample size =", nrow(tiny)))
+  
+  ##--- plot predictions as a panel.
+  gg = many_interactions(mod = modd, elas_data = tiny
+                         , pred_x = others # multiple ones
+                         , cat_z = "saison" )
+  
+  #-- as a panel
+  do.call( gridExtra::grid.arrange, gg)
+  
+  
+  
+}# end biomarker loop
+```
+
+### Sensitivity Test 
+
+Here are the bootstrap plots of significant variables. If a variable is statistically significant in the bootstrap samples, but not in the full analysis, we do not count it as statistically significant. 
+
+```{r, fig.height = 6, fig.width = 7 }
+bootplot 
+```
+
+
+### Association between biomarkers and hemoglobin levels 
+
+
+**Statistical Approach** Next we examine linear models with a few standard controls (age, sex, country of origin, season, sda) and look at the associations (and p-values) with each biomarker, one-at-a-time. We adjust the p-values for multiple comparisons using Benjamin-Hochberg. This analysis will help us see what associations are still worth exploring. 
+
+
+**Initial Findings** 
+
+```{r, eval = TRUE }
+
+controls = c( "age", "sex", "sda", "saison"
+              , "stunted")
+ttt  = NULL
+
+varrs = c("citrulline","bcaa_geomean", "AAT_feces" ,"ferritine", "crp", "cal_feces", "ige_blood")
+
+for ( varr in varrs ){ 
+  
+  #-- filtering to non-missing
+  small = datt %>% non_missing( c(controls, varr))
+  #-- in case country is all the same
+  bad = ifelse( (small$pays %>% unique() %>% length() )  <  2
+                , " + ", " + pays + ")
+  
+  form = formula( paste0( "hemoglobine ~ "
+                          , paste0( controls, collapse = " + ")
+                          , bad , varr ))
+  mod = lm( data = small, formula = form )
+  tt  = mod %>% 
+    summary %$% 
+    coefficients[ , c('Estimate','Pr(>|t|)')] 
+  tt = tt[ nrow(tt), ] %>% 
+    t() %>% 
+    data.frame() %>% 
+    dplyr::mutate( variable = varr ) %>%
+    dplyr::rename( pval = Pr...t.. )
+  
+  ttt = rbind.data.frame( ttt, tt )
+  #summary(mod)
+}
+
+#nice_print( mod ); summary(mod)
+
+ttt %>% 
+  dplyr::mutate( padj = stats::p.adjust(p = pval, method = "BH")
+                 , sig = padj < 0.05 
+                 , Estimate = signif( Estimate, 3) ) %>%
+  dplyr::arrange( pval, -sig ) %>%
+  # dplyr::arrange( - sig ) %>% 
+  tibble::as_tibble() %>% 
+  print( n = Inf)
+
+```
+
+The scatterplots between those variables and `hemoglobine` suggest that the association with all but AAT_feces and IgE may have a meaningful association. 
+
+```{r}
+
+#-- worth exploring (unadjusted p-value < 0.05 )
+these = ttt[ttt$pval < 0.05, "variable"] %>% unlist()
+gg = list(); hh = list(); k = 0
+
+for(j in these){ # j = these[1]
+  k = k + 1
+  
+  gg[[k]] = ggplot( datt ) + 
+    geom_point(aes_string(x = j, y = "hemoglobine", col = "pays")) +
+    geom_smooth( aes_string(x = j, y = "hemoglobine")
+                 , method = "lm", alpha = 0.5) +
+    theme_minimal()+
+    theme( legend.position = "top")
+  
+  }#end loop
+
+
+gridExtra::marrangeGrob( gg, ncol = 5, nrow = 1)
+```
