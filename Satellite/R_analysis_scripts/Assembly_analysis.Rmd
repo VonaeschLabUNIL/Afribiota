@@ -1,0 +1,842 @@
+---
+title: "Satellite - Analysis of assembled genomes"
+author: "Simon Yersin"
+date: "2024-07-18"
+output: html_document
+---
+
+This Rmd contains the analysis of the assembled genomes: MAGs.
+Warning: Remove AGN043DU from all analysis
+
+MAGs from the satellite project were included. N.B. AGN045GA did not produce any MAGs
+MAGs from the Afribiota project were subsequently added
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load library
+```{r, warning=FALSE, message=FALSE}
+library(Biostrings)
+library(purrr)
+library(devtools)
+library(phyloseq)
+library(tidyr)
+library(plyr)
+library(readxl)
+library(writexl)
+library(dplyr)
+library(stringr)
+library(ggplot2)
+library(vegan)
+library(microbiome)
+library(ape)
+library(ggpubr)
+library(ggsignif)
+library(pheatmap)
+library(picante)
+library(magrittr)
+library(clusterCrit)
+library(RColorBrewer)
+library(ggcorrplot)
+library(circlize)
+library(ComplexHeatmap)
+library(igraph)
+library(ggtree)
+```
+
+## Load metadata
+```{r}
+md <- as.data.frame(read_xlsx("/Users/admin/Documents/VLab_projects/01_Projects_MAIN/Satellite/Analysis/Metadata/Metadata_satellite.xlsx"))
+md$id <- str_remove(md$id, "1429")
+rownames(md) <- md$id
+
+md_full <- as.data.frame(read_xlsx("/Users/admin/Documents/VLab_projects/01_Projects_MAIN/Satellite/Analysis/Metadata/Metadata_satellite_full.xlsx"))
+rownames(md_full) <- md_full$id_modif
+```
+
+# MAGs
+## CheckM tables
+```{r}
+checkm_dir <- "/Users/admin/Documents/VLab_projects/01_Projects_MAIN/Satellite/Analysis/Assembly_based_output/checkM"
+checkm_tables <- list.files(checkm_dir, full.names = TRUE, pattern = "*.tsv")
+checkm_merged <- checkm_tables %>%
+  map_dfr(read.delim)
+colnames(checkm_merged)
+colnames(checkm_merged)[1] <- "Bin_ID"
+colnames(checkm_merged)[2] <- "Marker_lineage"
+colnames(checkm_merged)[3] <- "Num_genomes"
+colnames(checkm_merged)[4] <- "Num_markers"
+colnames(checkm_merged)[5] <- "Num_markers_sets"
+colnames(checkm_merged)[6] <- "0"
+colnames(checkm_merged)[7] <- "1"
+colnames(checkm_merged)[8] <- "2"
+colnames(checkm_merged)[9] <- "3"
+colnames(checkm_merged)[10] <- "4"
+colnames(checkm_merged)[11] <- "5"
+colnames(checkm_merged)[14] <- "Strain_heterogeneity"
+
+# Adding extension in the name, matching the file names for dRep
+checkm_merged$Bin_ID <- str_c(checkm_merged$Bin_ID, "", ".fa")
+```
+Adding Afribiota MAGs
+```{r}
+checkm_AFB_dir <- "/Users/admin/Documents/VLab_projects/01_Projects_MAIN/Afribiota/Dataset_PESeq/checkM"
+checkm_AFB_tables <- list.files(checkm_AFB_dir, full.names = TRUE, pattern = "*.tsv")
+checkm_AFB_merged <- checkm_AFB_tables %>%
+  map_dfr(read.delim)
+colnames(checkm_AFB_merged)
+colnames(checkm_AFB_merged)[1] <- "Bin_ID"
+colnames(checkm_AFB_merged)[2] <- "Marker_lineage"
+colnames(checkm_AFB_merged)[3] <- "Num_genomes"
+colnames(checkm_AFB_merged)[4] <- "Num_markers"
+colnames(checkm_AFB_merged)[5] <- "Num_markers_sets"
+colnames(checkm_AFB_merged)[6] <- "0"
+colnames(checkm_AFB_merged)[7] <- "1"
+colnames(checkm_AFB_merged)[8] <- "2"
+colnames(checkm_AFB_merged)[9] <- "3"
+colnames(checkm_AFB_merged)[10] <- "4"
+colnames(checkm_AFB_merged)[11] <- "5"
+colnames(checkm_AFB_merged)[14] <- "Strain_heterogeneity"
+
+# Adding extension in the name, matching the file names for dRep
+checkm_AFB_merged$Bin_ID <- str_c(checkm_AFB_merged$Bin_ID, "", ".fa")
+
+
+checkm_all_merged <- rbind(checkm_AFB_merged, checkm_merged)
+```
+CheckM table for drep
+```{r}
+drep_tab <- checkm_merged[,c(1, 12, 13)]
+colnames(drep_tab)[1] <- "genome"
+drep_tab$genome <- as.character(drep_tab$genome)
+#write.csv(drep_tab, "/Users/admin/Documents/VLab_projects/01_Projects_MAIN/Satellite/Analysis/Transmission/dRep/checkm_drepV2.csv", row.names = FALSE)
+```
+With Afribiota for dRep
+```{r}
+drep_tab <- checkm_all_merged[,c(1, 12, 13)]
+colnames(drep_tab)[1] <- "genome"
+drep_tab$genome <- as.character(drep_tab$genome)
+write.csv(drep_tab, "/Users/admin/Documents/VLab_projects/01_Projects_MAIN/Afribiota/Dataset_PESeq/checkm_drepV3.csv", row.names = FALSE)
+```
+
+## GTDB tables
+```{r, warning=FALSE}
+gtdb_dir <- "/Users/admin/Documents/VLab_projects/01_Projects_MAIN/Satellite/Analysis/Assembly_based_output/GTDB"
+gtdb_tables <- list.files(gtdb_dir, full.names = TRUE, pattern = "*.bac120.summary.tsv")
+standardize_columns <- function(file) {
+  df <- read.delim(file, stringsAsFactors = FALSE)
+  # Standardize all columns
+  df[, 4:7] <- df[, 4:7] %>%
+    mutate(across(everything(), ~ case_when(
+      . == "N/A" ~ NA_real_,  # Transform "N/A" to NA of type double
+      TRUE ~ as.numeric(.)
+    )))
+  return(df)
+}
+gtdb_merged <- gtdb_tables %>%
+  map_dfr(standardize_columns)
+
+gtdb_merged$user_genome <- str_c(gtdb_merged$user_genome, ".fa")
+```
+
+
+Merging checkm and GTDB tables
+We have more MAGs in checkM as we have the archeae MAGs, ignored in the GTDB
+```{r}
+# Merge 
+genome_df <- merge(checkm_merged, gtdb_merged, by.x="Bin_ID", by.y="user_genome")
+# Set as numeric
+genome_df$Completeness <- as.numeric(genome_df$Completeness)
+genome_df$Contamination <- as.numeric(genome_df$Contamination)
+# Remove AGN043DU
+genome_df <- genome_df %>% filter(str_detect(genome_df$Bin_ID, "AGN043DU", negate = TRUE))
+# 10'945 MAGs
+
+# Remove isolates (104 isolates) - not included for now
+# mags_df <- genome_df %>% filter(str_detect(Bin_ID, "AGN"))
+# 10'975 MAGs 
+
+# High quality MAGs
+mags_hq <- genome_df %>%
+  filter(Completeness >= 90 & Contamination <5)
+# 1'854 genomes
+# Medium quality MAGs
+mags_mq <- genome_df %>%
+  filter(Completeness >= 50 & Contamination <10)
+# 4'874 - 1'854 = 3020 MAGs
+
+# Add sampleID and childrenID
+genome_df <- genome_df %>%
+  mutate(SampleID = str_extract(Bin_ID, "AGN\\d{3}(FE|SA|GA|DU)"))
+n_distinct(genome_df$SampleID) # 127 -> one sample for which we have no MAGs? AGN045GA
+genome_df <- genome_df %>%
+  mutate(PatientID = str_extract(Bin_ID, "AGN\\d{3}"))
+
+# Add metadata
+genome_df <- merge(genome_df, md_full, by.x="SampleID", by.y="id_modif")
+```
+
+Salivarius MAGs analysis
+```{r}
+# All salivarius MAGs
+mags_df_ssal <- genome_df %>% filter(str_detect(genome_df$classification, "s__Streptococcus salivarius"))
+n_distinct(mags_df_ssal$SampleID) # 79
+n_distinct(mags_df_ssal$ChildrenID) # 41
+
+#Sequencing info
+seq_df <- as.data.frame(read.delim2("/Users/admin/Documents/VLab_projects/01_Projects_MAIN/Satellite/Analysis/Metadata/Clean_read_counts.tsv"))
+
+mags_df_ssal_m <- mags_df_ssal %>% select(c(SampleID, Bin_ID, Completeness, Contamination, classification, PatientID))
+mags_df_ssal_m <- merge(mags_df_ssal_m, seq_df, by.x = "SampleID", by.y = "SampleName", all = TRUE)
+
+mags_df_ssal_m$Bin_ID <- replace_na(mags_df_ssal_m$Bin_ID, "None")
+
+mags_df_ssal_m <- mags_df_ssal_m %>%
+  mutate(Source = str_sub(SampleID, -2, -1))
+
+# Richness
+mags_ssal_rich <- mags_df_ssal_m %>%
+  group_by(PatientID, Source, SampleID, NumReads) %>%
+  summarise(MAGs_Richness = case_when( 
+    str_detect(Bin_ID, "None") ~ 0,
+    str_detect(Bin_ID, "AGN") ~ n_distinct(Bin_ID))
+  )
+
+mags_ssal_rich <- mags_ssal_rich %>%
+  group_by(Source) %>%
+  summarise(
+    mean_richness = mean(MAGs_Richness, na.rm = TRUE),
+    se = sd(MAGs_Richness, na.rm = TRUE) / sqrt(n()),
+    .groups = 'drop'
+  )
+
+mags_ssal_rich$Source <- mags_ssal_rich$Source %>% str_replace_all("SA", "Saliva")
+mags_ssal_rich$Source <- mags_ssal_rich$Source %>% str_replace_all("GA", "Gastric")
+mags_ssal_rich$Source <- mags_ssal_rich$Source %>% str_replace_all("DU", "Duodenum")
+mags_ssal_rich$Source <- mags_ssal_rich$Source %>% str_replace_all("FE", "Feces")
+mags_ssal_rich$Source = factor(mags_ssal_rich$Source,
+                                               levels = c("Saliva", "Gastric", "Duodenum", "Feces"))
+
+pdf("Figures/MAGsRichness_Ssal.pdf")
+ggplot(mags_ssal_rich, aes(x = Source, y = mean_richness, color = Source)) +
+  geom_point(size = 5) +
+  geom_errorbar(aes(ymin = mean_richness - se, ymax = mean_richness + se), width = 0.2) +
+  scale_color_manual(values = c(
+    Feces = "#DCC04B",
+    Saliva = "#9AB9C2",
+    Gastric = "#BBDEEC",
+    Duodenum = "#EDE692"
+  )) +
+  labs(y = "S. salivarius MAGs richness") +
+  theme_minimal(base_size = 14) +
+  theme(axis.title.x = element_blank(),
+        legend.position = "bottom") +
+    guides(color=guide_legend(title = "Body site"))
+dev.off()
+```
+
+
+#Adding isolates
+isolate list:
+
+```{r}
+iso_df <- read_excel("/Users/admin/Documents/VLab_projects/01_Projects_MAIN/Satellite/Isolates_summary.xlsx")
+# Keep only salivarius 90-10
+iso_df <- iso_df %>% 
+  filter(`Strain name` %in% c("Streptococcus salivarius", "Streptococcus salivarius D", "Streptococcus salivarius_D")) %>%
+  filter(Completeness > 90 & Contamination<10)
+# 90 strains (removed Parasanguinis)
+iso_df <- iso_df %>% select(`Strain ID`, `Patient ID`, Source,  `Strain name`, Completeness, Contamination)
+colnames(iso_df)[1] <- "StrainID"
+colnames(iso_df)[2] <- "PatientID"
+colnames(iso_df)[3] <- "body_site"
+colnames(iso_df)[4] <- "classification"
+iso_df$classification <- iso_df$classification %>% str_replace_all("_", " ")
+# Adding sampleID
+iso_df <- iso_df %>%
+  mutate(Source = case_when(
+    body_site == "Saliva" ~ "SA",
+    body_site == "Stool" ~ "FE",
+    body_site == "Gastric aspirate" ~ "GA",
+    body_site == "Duodenum" ~ "DU"
+  )) %>%
+  mutate(SampleID = str_c(iso_df$PatientID, iso_df$Source))
+iso_df$body_site <- iso_df$body_site %>% str_replace_all("Gastric aspirate", "Gastric")
+iso_df$body_site <- iso_df$body_site %>% str_replace_all("Stool", "Feces")
+```
+
+
+MAGs list for ANI comparison
+```{r}
+mags_df_ssal <- genome_df %>% filter(str_detect(genome_df$classification, "s__Streptococcus salivarius"))
+mags_df_ssal <- mags_df_ssal %>%
+  mutate(Source = case_when(
+    body_site == "Saliva" ~ "SA",
+    body_site == "Feces" ~ "FE",
+    body_site == "Gastric" ~ "GA",
+    body_site == "Duodenum" ~ "DU"
+  ))
+mags_df_ssal <- mags_df_ssal %>% select(Bin_ID,  PatientID, body_site,  classification, Completeness, Contamination, Source, SampleID)
+colnames(mags_df_ssal)[1] <- "StrainID"
+mags_df_ssal$classification <- mags_df_ssal$classification %>%
+  str_remove_all("d__Bacteria;p__Bacillota;c__Bacilli;o__Lactobacillales;f__Streptococcaceae;g__Streptococcus;s__")
+mags_df_ssal$classification <- mags_df_ssal$classification %>% str_replace_all("_", " ")
+# 98 Strep salivarius MAGs
+mags_iso_df <- rbind(mags_df_ssal, iso_df)
+
+mags_iso_df$StrainID <- mags_iso_df$StrainID %>% str_remove_all(".fa")
+
+# Filter completeness 50% and contamination 10% 
+mags_iso_df_mq <- mags_iso_df %>%
+  filter(Completeness >= 50 & Contamination <= 10)
+
+# Filter completeness 75% and contamination 10% (dRep thresholds)
+mags_iso_df_drep <- mags_iso_df %>%
+  filter(Completeness >= 75 & Contamination < 10)
+# 87 SAT, 1 type strain, 2 afribiota, 13 MAGs
+
+unique(mags_iso_df_drep$SampleID)
+unique(mags_iso_df_drep$PatientID)
+
+write.csv2(mags_iso_df_drep$StrainID, "/Users/admin/Documents/VLab_projects/01_Projects_MAIN/Satellite/Analysis/Assembly_based_output/Phylogeny/Genomes_phylogeny.csv")
+
+# List of genome - remove?
+genome_full_list <- read.delim2("/Users/admin/Documents/VLab_projects/01_Projects_MAIN/Satellite/Analysis/Assembly_based_output/fastANI/genome_full_list.txt", header = FALSE)
+colnames(genome_full_list)[1] <- "genome"
+# Keep medium quality S. salivarius genomes
+genome_list_ssal <- genome_full_list %>% 
+  filter(genome %in% mags_iso_df_mq$StrainID)
+```
+
+
+# fastANI
+For the fastANI comparison, we selected genome of medium and high quality: completeness >= 50% and contamination < 10%
+## Streptococcus
+```{r}
+fastANI_ssal <- read.delim2("/Users/admin/Documents/VLab_projects/01_Projects_MAIN/Satellite/Analysis/Assembly_based_output/fastANI/SAT_fastANI_ssal.tsv", sep = "\t",
+                       header = FALSE)
+colnames(fastANI_ssal)[1] <- "Genome1"
+colnames(fastANI_ssal)[2] <- "Genome2"
+colnames(fastANI_ssal)[3] <- "ANI"
+colnames(fastANI_ssal)[4] <- "Aligned_fragments"
+colnames(fastANI_ssal)[5] <- "Number_query_fragment"
+
+unique(fastANI_ssal$Genome1) # 118 genomes --> remove AGN043DU
+fastANI_ssal <- fastANI_ssal %>% filter(str_detect(Genome1, "AGN043DU", negate = TRUE))
+fastANI_ssal <- fastANI_ssal %>% filter(str_detect(Genome2, "AGN043DU", negate = TRUE))
+
+# Remove type straina and Afribiota strains 
+fastANI_ssal <- fastANI_ssal %>% filter(str_detect(Genome1, "SsalTypeStrain", negate = TRUE))
+fastANI_ssal <- fastANI_ssal %>% filter(str_detect(Genome2, "SsalTypeStrain", negate = TRUE))
+fastANI_ssal <- fastANI_ssal %>% filter(str_detect(Genome1, "AFB", negate = TRUE))
+fastANI_ssal <- fastANI_ssal %>% filter(str_detect(Genome2, "AFB", negate = TRUE))
+
+fastANI_ssal$Genome1 <- str_remove_all(fastANI_ssal$Genome1, "_assembly.fa")
+fastANI_ssal$Genome1 <- str_remove_all(fastANI_ssal$Genome1, ".scaffolds.min1000.fa")
+fastANI_ssal$Genome1 <- str_remove_all(fastANI_ssal$Genome1, ".fa")
+
+fastANI_ssal$Genome2 <- str_remove_all(fastANI_ssal$Genome2, "_assembly.fa")
+fastANI_ssal$Genome2 <- str_remove_all(fastANI_ssal$Genome2, ".scaffolds.min1000.fa")
+fastANI_ssal$Genome2 <- str_remove_all(fastANI_ssal$Genome2, ".fa")
+
+# Fixing misslabeled strain (read file labeled 892 while it should be 692)
+fastANI_ssal$Genome1 <- str_replace(fastANI_ssal$Genome1, "SAT892", "SAT692")
+fastANI_ssal$Genome2 <- str_replace(fastANI_ssal$Genome2, "SAT892", "SAT692")
+
+# Keep only MAGs meeting dREP threshold
+fastANI_ssal <- fastANI_ssal %>% filter(Genome1 %in% mags_iso_df_drep$StrainID)
+fastANI_ssal <- fastANI_ssal %>% filter(Genome2 %in% mags_iso_df_drep$StrainID)
+# 100 genomes
+
+fastANI_ssal <- fastANI_ssal[,c(1:3)]
+fastANIw_ssal <- pivot_wider(fastANI_ssal, names_from = "Genome2", values_from = "ANI")
+
+fastANIw_ssal <- as.data.frame(fastANIw_ssal)
+rownames(fastANIw_ssal) <- fastANIw_ssal$Genome1
+fastANIw_ssal$Genome1 <- NULL
+fastANIw_ssal <- fastANIw_ssal[order(rownames(fastANIw_ssal)), order(colnames(fastANIw_ssal))]
+fastANIw_ssal <- as.matrix(fastANIw_ssal)
+fastANIw_ssal <- apply(fastANIw_ssal, 2, as.numeric)
+rownames(fastANIw_ssal) <- colnames(fastANIw_ssal)
+
+symmetrize_matrix <- function(mat) {
+  for (i in 1:nrow(mat)) {
+    for (j in 1:ncol(mat)) {
+      if (!is.na(mat[i, j]) && !is.na(mat[j, i])) {
+        mat[i, j] <- (mat[i, j] + mat[j, i]) / 2
+        mat[j, i] <- mat[i, j]
+      } else if (is.na(mat[i, j]) && !is.na(mat[j, i])) {
+        mat[i, j] <- mat[j, i]  # Assign non-NA value
+      } else if (!is.na(mat[i, j]) && is.na(mat[j, i])) {
+        mat[j, i] <- mat[i, j]  # Assign non-NA value
+      }
+    }
+  }
+  return(mat)
+}
+
+
+fastANI_ssal_sym <- symmetrize_matrix(as.matrix(fastANIw_ssal))
+fastANI_ssal_sym <- as.data.frame(fastANI_ssal_sym)
+fastANI_ssal_sym <- fastANI_ssal_sym %>% mutate(Genome1 = rownames(fastANI_ssal_sym))
+
+# I need to add from which sample the isolate and MAGs are from 
+# Add the taxonomy as well
+fastANI_ssal_sym <- merge(mags_iso_df, fastANI_ssal_sym, by.x = "StrainID", by.y = "Genome1", all.y = TRUE)
+
+# Save for tree
+# df_labels <- fastANI_ssal_sym[,c(1:4)]
+```
+
+Use fastANI distance for a heatmap
+```{r}
+hm_fastani_ssal <- fastANI_ssal_sym[,c(9:108)]
+rownames(hm_fastani_ssal) <- fastANI_ssal_sym$StrainID
+hm_fastani_ssal <- as.matrix(hm_fastani_ssal)
+
+row_annot_ssal <- rowAnnotation(body_site = fastANI_ssal_sym$body_site, patientID = fastANI_ssal_sym$PatientID,
+                                  col = list(body_site=c("Duodenum" = "#EDE692",
+                                                  "Gastric" = "#BBDEEC",
+                                                  "Saliva" = "#9AB9C2",
+                                                  "Feces" = "#DCC04B"
+                                                  ),
+                                             patientID=c("AGN005"="#9090bb",
+                                                         "AGN002"="#e06666", "AGN004"="#f6b26b", "AGN008"="#ffd966","AGN010"="#b6d7a8",
+                                                         "AGN014"="#741b47","AGN015"="#8fce20","AGN019"="#ffab99", 
+                                                         "AGN022"="#9fc5e8","AGN025"="#faa120", "AGN026"="#99aacc", "AGN028" = "#cc5010",
+                                                         "AGN030" = "#aaffff", "AGN031" = "#109090", "AGN035" = "#cc99ac", "AGN043" = "#505050",
+                                                         "AGN034"="#c27ba0","AGN036"="#990000","AGN039"="#bf9000","AGN045"="#134f5c",
+                                                         "AGN018"="#a2c4c9","AGN037"="#b45f06", "AGN044"="#caca90", "AGN047" ="#0099cc",
+                                                         "AGN041"="#38761d","AGN046"="#351c75","AGN032"="#8e7cc3")),
+                                  annotation_label = c("Body site", "PatientID"), 
+                            annotation_name_side = "top")
+# Removed: "Blood" = "#cc0000",,"Type_strain"="#cc0000"
+#"CPB512"="#fafabb","CPB460"="#999900",
+
+
+col_fun = colorRamp2(c(90,95,98,99,99.9999,100), c("white", "white", "#85D54AFF", "#1E9B8AFF", "#33638DFF", "#440154FF"))
+
+heatmap_ani_ssal <- Heatmap(hm_fastani_ssal, name = "ANI distance",col = col_fun, show_row_dend = FALSE, show_column_dend = FALSE,
+        right_annotation = row_annot_ssal, show_row_names = TRUE, row_names_side = "left",
+        row_names_gp = gpar(fontsize = 6),column_names_gp = gpar(fontsize = 6), border = TRUE)
+
+pdf("/Users/admin/Documents/VLab_projects/01_Projects_MAIN/Satellite/Analysis/Assembly_based_output/fastANI/Heatmap_ANI_Ssal.pdf", height = 10, width = 12)
+heatmap_ani_ssal
+dev.off()
+```
+
+Cut lower part 
+Not great
+```{r}
+
+
+
+lower_hm <- hm_fastani_ssal
+dend_l <- as.dendrogram(hclust(dist(lower_hm)))
+ord_l <- order.dendrogram(dend_l)
+lower_hm_ordered <- lower_hm[ord_l, ord_l]
+
+lower_hm_ordered[lower.tri(lower_hm_ordered)] <- NA
+col_fun_l <- colorRamp2(c(90,95,98,99,99.9999,100), c("white", "white", "#85D54AFF", "#1E9B8AFF", "#33638DFF", "#440154FF"), na.color = "white")
+
+
+Heatmap(
+  lower_hm_ordered,  # your matrix with lower.tri set to NA
+  name = "ANI distance",
+  col = col_fun,
+  na_col = "white",   # <- set NA cells to white here
+  cluster_rows = FALSE,
+  cluster_columns = FALSE,
+  show_row_dend = FALSE,
+  show_column_dend = FALSE,
+  right_annotation = row_annot_ssal,
+  show_row_names = TRUE,
+  row_names_side = "left",
+  row_names_gp = gpar(fontsize = 6),
+  column_names_gp = gpar(fontsize = 6),
+  border = TRUE
+)
+
+Heatmap(hm_fastani_ssal, name = "ANI distance",col = col_fun, show_row_dend = FALSE, show_column_dend = FALSE,
+        right_annotation = row_annot_ssal, show_row_names = TRUE, row_names_side = "left",
+        row_names_gp = gpar(fontsize = 6),column_names_gp = gpar(fontsize = 6), border = TRUE)
+```
+
+Try adding tree as dendrogram after
+
+
+
+How close are MAGs from isolates?
+```{r}
+# Perpare dataframe
+fastANI_ssal_diversity <- merge(fastANI_ssal, fastANI_ssal_sym[,c(1,2,3)], 
+                                by.x = "Genome1", by.y = "StrainID", all.x = TRUE)
+colnames(fastANI_ssal_diversity)[4] <- "PatientID1"
+colnames(fastANI_ssal_diversity)[5] <- "Source1"
+fastANI_ssal_diversity <- merge(fastANI_ssal_diversity, fastANI_ssal_sym[,c(1,2,3)],
+                           by.x = "Genome2", by.y = "StrainID", all.x = TRUE)
+colnames(fastANI_ssal_diversity)[6] <- "PatientID2"
+colnames(fastANI_ssal_diversity)[7] <- "Source2"
+
+# Keep only ANI comparison within same individual and same source
+fastANI_ssal_divIS <- fastANI_ssal_diversity %>%
+  filter(PatientID1 == PatientID2) %>%
+  filter(Source1 == Source2) %>%
+  filter(Genome1 != Genome2) %>%
+  mutate(Pair = pmin(Genome1, Genome2), Pair2 = pmax(Genome1, Genome2)) %>%
+  distinct(Pair, Pair2, .keep_all = TRUE) %>%
+  select(-Pair, -Pair2) %>%
+  filter(str_detect(Genome2, "\\."))
+# No MAGs have ANI > 99.9% with anyy isolates
+# But 12 have >98%, which is the dRep threshold 
+
+```
+
+```{r}
+# Keep within single individual but not same source!
+fastANI_ssal_patient <- fastANI_ssal_diversity %>%
+  filter(PatientID1 == PatientID2) %>%
+  #filter(Source1 == Source2) %>%
+  filter(Genome1 != Genome2) %>%
+  mutate(Pair = pmin(Genome1, Genome2), Pair2 = pmax(Genome1, Genome2)) %>%
+  distinct(Pair, Pair2, .keep_all = TRUE) %>%
+  select(-Pair, -Pair2)
+
+fastANI_ssal_patient$ANI <- as.numeric(fastANI_ssal_patient$ANI)
+fastANI_ssal_patient$Genome1 <- str_c(fastANI_ssal_patient$Genome1, "_",fastANI_ssal_patient$PatientID1 , "_", fastANI_ssal_patient$Source1)
+fastANI_ssal_patient$Genome2 <- str_c(fastANI_ssal_patient$Genome2, "_",fastANI_ssal_patient$PatientID2,  "_", fastANI_ssal_patient$Source2)
+
+all_genomes_isomags <- unique(c(fastANI_ssal_patient$Genome1, fastANI_ssal_patient$Genome2))
+igraph_isomags <- graph_from_data_frame(fastANI_ssal_patient[fastANI_ssal_patient$ANI > 98, c("Genome1", "Genome2")], 
+                             directed = FALSE, vertices = all_genomes_isomags)
+
+pdf("/Users/admin/Documents/VLab_projects/01_Projects_MAIN/Satellite/Analysis/Assembly_based_output/fastANI/Cluster_ANI98_MAGsISO.pdf", height = 14, width = 14)
+plot(igraph_isomags, vertex.color = components(igraph_isomags)$membership, vertex.size = 5, vertex.label.color = "black",
+     layout = layout_with_fr)
+dev.off()
+
+# Save cluster
+sharing_clusters_im <- as.data.frame(components(igraph_isomags)$membership)
+colnames(sharing_clusters_im)[1] <- "Strain_cluster"
+sharing_clusters_im <- cbind(sharing_clusters_im, str_split_fixed(rownames(sharing_clusters_im), "_", n=3))
+colnames(sharing_clusters_im)[2] <- "StrainID"
+colnames(sharing_clusters_im)[3] <- "PatientID"
+colnames(sharing_clusters_im)[4] <- "Source"
+```
+Plotting ANI distance
+```{r}
+fastANI_ssal_plot <- fastANI_ssal_diversity %>%
+  filter(PatientID1 == PatientID2) %>%
+  filter(Source1 == Source2) %>%
+  filter(Genome1 != Genome2) %>%
+  mutate(Pair = pmin(Genome1, Genome2), Pair2 = pmax(Genome1, Genome2)) %>%
+  distinct(Pair, Pair2, .keep_all = TRUE) %>%
+  select(-Pair, -Pair2)
+fastANI_ssal_plot$ANI <- as.numeric(fastANI_ssal_plot$ANI)
+
+pdf("/Users/admin/Documents/VLab_projects/01_Projects_MAIN/Satellite/Analysis/Assembly_based_output/fastANI/ANIcount_comparison.pdf", height = 4, width = 10)
+
+ggplot(fastANI_ssal_plot, aes(x=ANI,color = Source1, fill = Source1)) + 
+  geom_histogram(binwidth = 0.1) +
+  scale_fill_manual(values = c("Duodenum" = "#8fce00",
+                               "Gastric aspirate" = "#6aa84f",
+                               "Saliva" = "#3d85c6",
+                               "Stool" = "#ce7e00")) +
+  scale_color_manual(values = c("Duodenum" = "#8fce00",
+                                "Gastric aspirate" = "#6aa84f",
+                                "Saliva" = "#3d85c6",
+                                "Stool" = "#ce7e00")) +
+  theme_bw() +
+  #scale_x_continuous(breaks = seq(94.8, 100, by = 0.1), ) +
+  theme(axis.text.x=element_text(angle = 45, hjust = .9),
+        legend.position = c(0.5, 0.85),
+        legend.direction = "horizontal",
+        legend.justification = "center",
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank()) + 
+  labs(fill = "ANI (%)", color = "ANI (%)") +
+  ylab("Number of pairewise comparison")
+dev.off()
+```
+
+# Phylogeny
+```{r}
+tree <- read.tree("/Users/admin/Documents/VLab_projects/01_Projects_MAIN/Satellite/Analysis/Assembly_based_output/Phylogeny/Aug11/SAT_isolates.treefile")
+tree_phylo <- ape::as.phylo(tree)
+
+# Find node number for rooting using outgroup of S. parasanguinis
+ggtree(tree, branch.length = "none") +
+  geom_tiplab() +
+  geom_text2(aes(label = node), hjust = -0.3, color = "red")
+# Node: 140 for rooting?
+
+# Rooting tree at node 140
+tree_rooted <- ape::root(tree, node = 140)
+# Drop parasanguinis, AFB strains and type strain
+tree_rooted <- drop.tip(tree_rooted, c("SAT340","SAT513","SAT551", "SAT894"
+                                       , "AFB477", "AFB570", "SsalTypeStrain"))
+
+
+# Add metadata
+phylo_md <- mags_iso_df_drep
+# Create heatmap data
+heatmap_data <- phylo_md[, c("body_site", "PatientID")]
+colnames(heatmap_data)[1] <- "Source"
+rownames(heatmap_data) <- phylo_md$StrainID
+
+#heatmap_data$PatientID[which(heatmap_data$Source=="Blood")] <- "Type_strain"
+# Define colors
+source_colors <- c(
+  #"Blood" = "#cc0000",
+  "Duodenum" = "#EDE692",
+  "Gastric" = "#BBDEEC",
+  "Saliva" = "#9AB9C2",
+  "Feces" = "#DCC04B"
+)
+
+patientID_colors <- c(
+  "AGN005"="#9090bb",
+  "AGN002"="#e06666", "AGN004"="#f6b26b", "AGN008"="#ffd966", "AGN010"="#b6d7a8",
+  "AGN014"="#741b47", "AGN015"="#8fce20", "AGN019"="#ffab99",
+  "AGN022"="#9fc5e8", "AGN025"="#faa120", "AGN026"="#99aacc", "AGN028" = "#cc5010",
+  "AGN030" = "#aaffff", "AGN031" = "#109090", "AGN035" = "#cc99ac", "AGN043" = "#505050",
+  "AGN034"="#c27ba0", "AGN036"="#990000", "AGN039"="#bf9000", "AGN045"="#134f5c",
+  "AGN018"="#a2c4c9", "AGN037"="#b45f06", "AGN044"="#caca90", "AGN047" ="#0099cc",
+  "AGN041"="#38761d", "AGN046"="#351c75", "AGN032"="#8e7cc3"
+)
+
+combined_colors <- c(source_colors, patientID_colors)
+all_breaks <- names(combined_colors)
+
+
+
+# Plot tree
+p_tree <- ggtree(tree_rooted, branch.length = "none") +
+  geom_tiplab(size=2)
+
+p_tree <- gheatmap(p_tree, heatmap_data, offset = 1.5, width = 0.1, font.size = 2,
+         colnames = TRUE, colnames_position = "top", colnames_angle = 90, colnames_offset_y = 2,
+         legend_title = "") +
+  scale_fill_manual(values = combined_colors, breaks = all_breaks) +
+    scale_x_ggtree()
+
+
+pdf("/Users/admin/Documents/VLab_projects/01_Projects_MAIN/Satellite/Analysis/Assembly_based_output/Isolates/Figures/Phylogeny_IsoMAGs.pdf", height = 20, width = 12)
+p_tree
+dev.off()
+```
+
+
+
+# Microdiversity
+```{r}
+ssal_clusters <- read.csv2("/Users/admin/Documents/VLab_projects/01_Projects_MAIN/Satellite/Analysis/Assembly_based_output/inStrain/With_isolates/dRep_salivarius_clusters_MAGsISO.csv", sep = ",")
+ssal_clusters <- ssal_clusters[,-1]
+ssal_clusters$genome <- str_remove_all(ssal_clusters$genome, ".scaffolds.min1000")
+ssal_clusters$genome <- str_remove_all(ssal_clusters$genome, "_assembly")
+ssal_clusters$genome <- str_remove_all(ssal_clusters$genome, ".fasta")
+ssal_clusters$genome <- str_remove_all(ssal_clusters$genome, ".fa")
+ssal_clusters$genome <- str_replace_all(ssal_clusters$genome, "SAT892", "SAT692")
+ssal_clusters <- ssal_clusters %>% filter(str_detect(genome, "AGN043DU", negate = TRUE))
+
+mags_iso_df <- merge(mags_iso_df, ssal_clusters, by.x = "StrainID", by.y = "genome")
+
+# Import winning genomes
+ssal_wg <- read.csv2("/Users/admin/Documents/VLab_projects/01_Projects_MAIN/Satellite/Analysis/Assembly_based_output/inStrain/With_isolates/dRep_salivarius_WinningGenomes_MAGsISO.csv", sep = ",")
+ssal_wg <- ssal_wg[,-1]
+
+mags_iso_df <- mags_iso_df %>%
+  mutate(WinG = case_when(
+    StrainID %in% ssal_wg$genome ~ "Yes",
+    TRUE ~ "No"
+  ))
+
+```
+
+To be rediscussed and retried with inStrain...
+I don't understand what I do
+```{r}
+AGN022SA <- read.delim2("/Users/admin/Documents/VLab_projects/01_Projects_MAIN/Satellite/Analysis/Assembly_based_output/microdiversity/AGN022SA_filtered_SNVs.tsv")
+
+AGN022SA <- AGN022SA %>%
+  mutate(genome = "")
+AGN022SA$genome <- sub("-.*", "", AGN022SA$scaffold)
+AGN022SA$genome <- sub("_.*", "",AGN022SA$genome)
+# Remove unwanted genome
+AGN022SA <- AGN022SA %>%
+  filter(genome %in% ssal_wg$genome | str_detect(genome, "AGN"))
+
+# SNP per genome --> raw diversity signal per strain (all quite high!)
+AGN022SA_snp_per_genome <- AGN022SA %>%
+  group_by(genome) %>%
+  summarise(SNP_count = n()) %>%
+  arrange(desc(SNP_count))
+
+# Change to numeric
+AGN022SA$var_freq <- as.numeric(AGN022SA$var_freq)
+# Check allele frequency
+ggplot(AGN022SA, aes(x = var_freq)) +
+  geom_histogram(binwidth = 0.05, fill = "steelblue", color = "black") +
+  theme_bw() +
+  labs(title = "Variant allele frequency distribution")
+# One strain: peak near 0 and 1
+# Two strains additional peak near 0.5
+# More than two strains: intermediate distribution
+
+
+# Estimate distinct strains
+AGN022SA_strain_estimates <- AGN022SA %>%
+  group_by(genome) %>%
+  summarise(
+    mean_cov = mean(position_coverage, na.rm = TRUE),
+    breadth = n_distinct(position) / genome_size[genome]  # needs genome size vector
+  ) %>%
+  filter(mean_cov >= 10, breadth >= 0.5)
+
+n_distinct_strains <- nrow(strain_estimates)
+
+
+# Load libraries
+library(dplyr)
+library(ggplot2)
+library(mclust)   # for Gaussian Mixture Modelling
+
+# Let's say your filtered inStrain SNV table is in 'df'
+# and the variant allele frequency is in a column called var_freq
+
+# 1. Filter for sites with true variation (exclude 0 and 1)
+vaf <- AGN022SA %>%
+  filter(var_freq > 0.05 & var_freq < 0.95) %>%   # exclude fixed sites
+  pull(var_freq)
+
+# 2. Fit a Gaussian Mixture Model
+gmm <- Mclust(vaf, G = 1:8)  # test models with 1 to 6 components
+
+# 3. View estimated number of components (= approximate strain count)
+cat("Estimated strain count:", gmm$G, "\n")
+
+# 4. Plot the VAF distribution with mixture components
+plot_df <- data.frame(vaf = vaf)
+
+ggplot(plot_df, aes(x = vaf)) +
+  geom_histogram(aes(y = ..density..), binwidth = 0.02, fill = "grey80", color = "black") +
+  stat_function(fun = function(x) {
+    sum(sapply(1:gmm$G, function(k) {
+      gmm$parameters$pro[k] * 
+        dnorm(x, mean = gmm$parameters$mean[k], sd = sqrt(gmm$parameters$variance$sigmasq[k]))
+    }))
+  }, color = "red", size = 1) +
+  labs(x = "Variant Allele Frequency", y = "Density",
+       title = paste("VAF Mixture Model —", gmm$G, "strain(s) estimated")) +
+  theme_minimal()
+
+```
+
+
+```{r}
+AGN001SA <- read.delim2("/Users/admin/Desktop/output/AGN001SA_inStrainOut_SNVs.tsv") %>%
+  mutate(
+    var_freq = as.numeric(var_freq),
+    position_coverage = as.numeric(position_coverage),
+    allele_count = as.numeric(allele_count)
+  ) %>%
+  filter(allele_count > 1) %>%
+  filter(position_coverage >= 10) %>%
+  filter(var_freq >= 0.05)
+
+# Tri-allelic rate
+tri_allelic_rate <- mean(AGN001SA$allele_count >= 3) * 100
+
+# Median and mode-ish MAF (minor allele freq)
+median_MAF <- median(AGN001SA$var_freq)
+mean_MAF <- mean(AGN001SA$var_freq)
+
+# Histogram of var_freq
+ggplot(AGN001SA, aes(x = var_freq)) +
+  geom_histogram(binwidth = 0.02, fill = "steelblue", color = "white") +
+  labs(
+    title = "Minor Allele Frequency distribution",
+    x = "var_freq (minor allele frequency)",
+    y = "Count of SNV sites"
+  ) +
+  theme_minimal()
+
+if (nrow(AGN001SA) < 100) {
+  strain_guess <- "Likely 1 strain (too few polymorphisms)"
+} else if (tri_allelic_rate <= 2) {
+  strain_guess <- "Likely 2 strains"
+} else {
+  strain_guess <- "Likely ≥3 strains"
+}
+```
+```{r}
+AGN010GA <- read.delim2("/Users/admin/Desktop/output/AGN010GA_inStrainOut_SNVs.tsv") %>%
+  mutate(
+    var_freq = as.numeric(var_freq),
+    position_coverage = as.numeric(position_coverage),
+    allele_count = as.numeric(allele_count)
+  ) %>%
+  filter(allele_count > 1) %>%
+  filter(position_coverage >= 10) %>%
+  filter(var_freq >= 0.05)
+
+# Tri-allelic rate
+tri_allelic_rate <- mean(AGN010GA$allele_count >= 3) * 100
+
+# Median and mode-ish MAF (minor allele freq)
+median_MAF <- median(AGN010GA$var_freq)
+mean_MAF <- mean(AGN010GA$var_freq)
+
+# Histogram of var_freq
+ggplot(AGN001SA, aes(x = var_freq)) +
+  geom_histogram(binwidth = 0.02, fill = "steelblue", color = "white") +
+  labs(
+    title = "Minor Allele Frequency distribution",
+    x = "var_freq (minor allele frequency)",
+    y = "Count of SNV sites"
+  ) +
+  theme_minimal()
+
+if (nrow(AGN001SA) < 100) {
+  strain_guess <- "Likely 1 strain (too few polymorphisms)"
+} else if (tri_allelic_rate <= 2) {
+  strain_guess <- "Likely 2 strains"
+} else {
+  strain_guess <- "Likely ≥3 strains"
+}
+```
+```{r}
+AGN018FE <- read.delim2("/Users/admin/Desktop/output/AGN018FE_inStrainOut_SNVs.tsv") %>%
+  mutate(
+    var_freq = as.numeric(var_freq),
+    position_coverage = as.numeric(position_coverage),
+    allele_count = as.numeric(allele_count)
+  )
+
+# Tri-allelic rate
+tri_allelic_rate <- mean(AGN018FE$allele_count >= 3) * 100
+
+# Median and mode-ish MAF (minor allele freq)
+median_MAF <- median(AGN018FE$var_freq)
+mean_MAF <- mean(AGN018FE$var_freq)
+
+# Histogram of var_freq
+ggplot(AGN018FE, aes(x = var_freq)) +
+  geom_histogram(binwidth = 0.02, fill = "steelblue", color = "white") +
+  labs(
+    title = "Minor Allele Frequency distribution",
+    x = "var_freq (minor allele frequency)",
+    y = "Count of SNV sites"
+  ) +
+  theme_minimal()
+
+if (nrow(AGN018FE) < 100) {
+  strain_guess <- "Likely 1 strain (too few polymorphisms)"
+} else if (tri_allelic_rate <= 2) {
+  strain_guess <- "Likely 2 strains"
+} else {
+  strain_guess <- "Likely ≥3 strains"
+}
+```
+

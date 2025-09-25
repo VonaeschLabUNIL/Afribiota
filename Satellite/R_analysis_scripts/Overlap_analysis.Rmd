@@ -1,0 +1,210 @@
+---
+title: "Methods overlap for transmission events"
+author: "Simon Yersin"
+date: "2025-05-05"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(dplyr)
+library(tidyr)
+library(ComplexHeatmap)
+library(stringr)
+```
+
+
+Only isolates - overlap methods
+Load tables
+```{r}
+# Import dRep clusters
+ssal_clusters <- read.csv2("/Users/admin/Documents/VLab_projects/01_Projects_MAIN/Satellite/Analysis/Assembly_based_output/inStrain/With_isolates/dRep_salivarius_clusters_MAGsISO.csv", sep = ",")
+
+ssal_clusters$genome <- str_remove_all(ssal_clusters$genome, ".scaffolds.min1000")
+ssal_clusters$genome <- str_remove_all(ssal_clusters$genome, "_assembly")
+ssal_clusters$genome <- str_remove_all(ssal_clusters$genome, ".fasta")
+ssal_clusters$genome <- str_remove_all(ssal_clusters$genome, ".fa")
+ssal_clusters$genome <- str_replace_all(ssal_clusters$genome, "SAT892", "SAT692")
+
+# Import winning genomes
+ssal_wg <- read.csv2("/Users/admin/Documents/VLab_projects/01_Projects_MAIN/Satellite/Analysis/Assembly_based_output/inStrain/With_isolates/dRep_salivarius_WinningGenomes_MAGsISO.csv", sep = ",")
+
+# inStrain - 11 transmission events
+trans_instrain <- read.csv2("/Users/admin/Documents/VLab_projects/01_Projects_MAIN/Satellite/Analysis/Assembly_based_output/inStrain/inStrain_salivarius_StrainSharing.csv", sep = ",")
+trans_instrain <- trans_instrain[,c(3,2,23)]
+colnames(trans_instrain)[1] <- "Shared_strain"
+trans_instrain <- merge(trans_instrain, ssal_clusters[,2:3], by.x="Shared_strain", by.y = "genome")
+trans_instrain <- trans_instrain %>%
+  mutate(Method = "inStrain")
+
+# Isolations - 12 sharing events
+trans_iso <- read.csv2("/Users/admin/Documents/VLab_projects/01_Projects_MAIN/Satellite/Analysis/Assembly_based_output/Isolates/Output_tables/Iso_salivarius_StrainSharing.csv", sep = ",")
+trans_iso <- trans_iso[,-1]
+trans_iso$Source <- str_replace_all(trans_iso$Source, "Saliva", "SA")
+trans_iso$Source <- str_replace_all(trans_iso$Source, "Stool", "FE")
+trans_iso$Source <- str_replace_all(trans_iso$Source, "Gastric aspirate", "GA")
+trans_iso$Source <- str_replace_all(trans_iso$Source, "Duodenum", "DU")
+trans_iso <- merge(trans_iso, ssal_clusters[,2:3], by.x="StrainID", by.y = "genome")
+trans_iso <- merge(trans_iso, ssal_wg[,c(2,9)], by.x="secondary_cluster", by.y = "cluster")
+trans_iso <- trans_iso %>%
+  group_by(genome, PatientID, secondary_cluster, Strain_cluster) %>%
+  summarise(Compartment = str_c(unique(Source), collapse = "_"), .groups = "drop") %>% 
+  filter(str_detect(Compartment, "_"))
+trans_iso <- trans_iso[, -c(4)]
+colnames(trans_iso)[1] <- "Shared_strain"
+colnames(trans_iso)[2] <- "SampleID"
+trans_iso <- trans_iso[,c(1,2,4,3)]
+trans_iso <- trans_iso %>%
+  mutate(Method = "Isolations")
+
+# StrainPhlAn3 
+trans_strainphlan <- read.csv2("/Users/admin/Documents/VLab_projects/01_Projects_MAIN/Satellite/Analysis/Read_based_output/STRAINPHLAN/With_isolates/StrainPhlAn_sharedStrains.csv", sep = ",")
+trans_strainphlan <- trans_strainphlan %>% filter(Species == "Streptococcus_salivarius")
+trans_strainphlan <- trans_strainphlan[, c(2,3,9,15)]
+colnames(trans_strainphlan)[3] <- "SampleID"
+trans_strainphlan <- merge(trans_strainphlan, ssal_clusters[,2:3], by.x="Strain1", by.y = "genome", all.x = TRUE)
+trans_strainphlan <- merge(trans_strainphlan, ssal_wg[,c(2,9)], by.x="secondary_cluster", by.y = "cluster", all.x = TRUE)
+trans_strainphlan <- trans_strainphlan %>%
+  filter(Compartments %in% c("SA_GA", "DU_FE", "DU_SA", "DU_GA", "FE_DU", "FE_GA", "FE_SA", "SA_FE", "SA_DU", "GA_SA", "GA_FE", "GA_DU")) # Remove same compartment
+trans_strainphlan <- trans_strainphlan %>%
+  group_by(genome, SampleID, secondary_cluster) %>%
+  summarise(Compartments = str_c(unique(Compartments), collapse = "_"), .groups = "drop") %>% 
+  filter(str_detect(Compartments, "_"))
+colnames(trans_strainphlan)[1] <- "Shared_strain"
+trans_strainphlan <- trans_strainphlan %>%
+  mutate(Method = "StrainPhlAn")
+trans_strainphlan$Shared_strain[which(trans_strainphlan$SampleID=="AGN010" & is.na(trans_strainphlan$Shared_strain))] <- "AGN010MG"
+trans_strainphlan$Shared_strain[which(trans_strainphlan$SampleID=="AGN013")] <- "AGN013MG"
+trans_strainphlan <- trans_strainphlan[,c(1:2,4,3,5)]
+colnames(trans_strainphlan)[3] <- "Compartment"
+
+
+transmission <- rbind(trans_iso, trans_instrain)
+transmission <- rbind(transmission, trans_strainphlan)
+transmission$Shared_strain[which(is.na(transmission$Shared_strain))] <- paste0(transmission$SampleID[which(is.na(transmission$Shared_strain))])
+
+unique(transmission$Compartment)
+transmission$Compartment[which(transmission$Compartment =="SA_FE" | transmission$Compartment =="FE_SA")] <- "Saliva-Stool"
+transmission$Compartment[which(transmission$Compartment =="SA_GA" | transmission$Compartment =="GA_SA")] <- "Saliva-Gastric"
+transmission$Compartment[which(transmission$Compartment =="DU_SA")] <- "Saliva-Duodenum"
+transmission$Compartment[which(transmission$Compartment =="GA_DU" | transmission$Compartment =="DU_GA")] <- "Gastric-Duodenum"
+transmission$Compartment[which(transmission$Compartment =="GA_FE" | transmission$Compartment =="FE_GA")] <- "Gastric-Stool"
+transmission$Compartment[which(transmission$Compartment =="SA_FE_GA" | transmission$Compartment =="SA_GA_GA_FE_SA_FE" |
+                                 transmission$Compartment =="SA_GA_SA_FE_GA_FE")] <- "Saliva-Gastric-Stool"
+transmission$Compartment[which(transmission$Compartment %in% c("FE_DU_SA_DU_FE_SA" ,"SA_GA_SA_DU_SA_FE_DU_GA_FE_GA_FE_DU" ,
+                                                               "SA_FE_GA_DU", "FE_GA_SA_DU",
+                                                               "SA_FE_SA_GA_SA_DU_DU_GA_FE_GA_FE_DU"))] <- "Saliva-Gastric-Duodenum-Stool"
+transmission$Compartment[which(transmission$Compartment %in% c("DU_SA_FE", "FE_SA_DU","FE_DU_FE_SA_SA_DU"))] <- "Saliva-Duodenum-Stool"
+unique(transmission$Compartment)
+
+```
+
+Summary table
+```{r}
+# Saliva Feces (see later)
+transmission_sf <- transmission
+# Saliva - feces
+transmission_sf <- transmission_sf %>% filter(str_detect(Compartment, "Saliva") & str_detect(Compartment, "Stool"))
+transmission_sf <- transmission_sf[,c(5,2,1)]
+transmission_sf <- transmission_sf %>% 
+  mutate(SharingEvent = str_c(SampleID, "_", Shared_strain))
+transmission_sf <- transmission_sf[,c(1,4)]
+transmission_sf <- transmission_sf %>% mutate(Count = 1)
+transmission_sf <- pivot_wider(transmission_sf, names_from = SharingEvent, values_from = Count, values_fill = 0)
+transmission_sf <- t(transmission_sf)
+colnames(transmission_sf) <- transmission_sf[1,]
+transmission_sf <- transmission_sf[-1,]
+transmission_sf <- as.data.frame(transmission_sf)
+transmission_sf <- transmission_sf %>% mutate(Strain = rownames(transmission_sf))
+
+
+# Summary for all 
+transmission_all <- transmission
+transmission_all <- transmission_all %>% 
+  mutate(SharingEvent = str_c(SampleID, "_", Shared_strain, "_", Compartment))
+transmission_all <- transmission_all[,c(6,5)]
+transmission_all <- transmission_all %>% mutate(Count = 1)
+transmission_all <- pivot_wider(transmission_all, names_from = SharingEvent, values_from = Count, values_fill = 0)
+transmission_all <- t(transmission_all)
+colnames(transmission_all) <- transmission_all[1,]
+transmission_all <- transmission_all[-1,]
+transmission_all <- as.data.frame(transmission_all)
+transmission_all <- transmission_all %>% mutate(Sharing_Event = rownames(transmission_all))
+
+
+```
+
+
+Upset plot
+```{r}
+transmission_hp <- transmission[,c(5,2,1)]
+
+
+transmission_hp <- transmission_hp %>% 
+  mutate(SharingEvent = str_c(SampleID, "_", Shared_strain))
+transmission_hp <- transmission_hp[,c(1,4)]
+transmission_hp <- transmission_hp %>% mutate(Count = 1)
+transmission_set <- pivot_wider(transmission_hp, names_from = SharingEvent, values_from = Count, values_fill = 0)
+
+transmission_set <- t(transmission_set)
+colnames(transmission_set) <- transmission_set[1,]
+transmission_set <- transmission_set[-1,]
+
+transmission_set_m <- as.matrix(apply(transmission_set, 2, as.numeric))
+comb_mat <- make_comb_mat(transmission_set_m, mode = "intersect")
+cs = comb_size(comb_mat)
+ss = set_size(comb_mat)
+
+ht = UpSet(comb_mat,
+      set_order = c("inStrain","StrainPhlAn","Isolations"),  
+      comb_order = order(comb_size(comb_mat), decreasing = TRUE),
+      top_annotation = HeatmapAnnotation(
+        "Transmission \nevents detected" = anno_barplot(cs, 
+            ylim = c(0, max(cs)*1.1),
+            border = FALSE, 
+            gp = gpar(fill = "black"), 
+            height = unit(4, "cm")
+        ), 
+        annotation_name_side = "left", 
+        annotation_name_rot = 90,
+        annotation_name_gp = gpar(fontsize = 12,face = 3)),
+      left_annotation = rowAnnotation(
+        "Transmission events \ndetected by method" = anno_barplot(-ss, 
+            baseline = 0,
+            axis_param = list(
+                at = c(0, -5, -10, -15),
+                labels = c(0, 5, 10, 15),
+                labels_rot = 0),
+            border = FALSE, 
+            gp = gpar(fill = "black"), 
+            width = unit(4, "cm")
+        ),
+        set_name = anno_text(set_name(comb_mat),
+            gp = gpar(fontsize=12,face = 3),
+            location = 0.5, 
+            just = "center",
+            width = max_text_width(set_name(comb_mat)) + unit(1, "mm")),
+        annotation_name_gp = gpar(fontsize = 12,face = 3)
+    ), 
+    right_annotation = NULL,
+    show_row_names = FALSE)
+
+
+od = column_order(ht)
+rd = row_order(ht)
+
+
+pdf("/Users/admin/Documents/VLab_projects/01_Projects_MAIN/Satellite/Analysis/Assembly_based_output/Figures/Upsetplot.pdf", height = 4, width = 8)
+ht = draw(ht)
+decorate_annotation("Transmission \nevents detected", {
+    grid.text(cs[od], x = seq_along(cs), y = unit(cs[od], "native") + unit(2, "pt"), 
+        default.units = "native", just = c("left", "bottom"), 
+        gp = gpar(fontsize = 8,face = 3, col = "#404040"), rot = 45)
+})
+dev.off()
+
+
+```
