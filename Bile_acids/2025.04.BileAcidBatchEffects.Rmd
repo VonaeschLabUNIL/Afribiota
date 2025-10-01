@@ -1,0 +1,716 @@
+---
+title: "2024.BileAcids_CleanedForManuscript"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#Setup
+library(dplyr)
+library(ggplot2)
+library(ggbiplot)
+library(factoextra)
+library(readstata13)
+library(sva) #combat!
+library(tidyr)
+library(vegan)
+
+knitr::opts_knit$set(root.dir = '/Users/khuus/ownCloud/KH-PhD/BileAcidsManuscript/Manuscript2025')
+
+#functions
+source("/Users/khuus/ownCloud/KH-PhD/BileAcidsManuscript/Manuscript2024/kelsey_useful_functions.R")
+impute=function(x){
+  x[is.na(x)] =min(x, na.rm=TRUE)/2 #convert the NA values to half the minimum from the column, these were 7 initially
+  x #display the column
+}
+
+```
+
+## Bile Acids Analysis
+
+```{r data preprocessing}
+
+data_bile = readstata13::read.dta13(
+  "/Users/khuus/ownCloud/KH-PhD/BileAcidsManuscript/Manuscript2024/BileacidsandmetadataOct20v2.dta", encoding = "latin1" ) %>%
+  dplyr::mutate( pays = factor( pays
+                                , levels = 1:2
+                                , labels = c("Madagascar","CAR"))
+                 , Analysisround = factor( Analysisround
+                                           , levels = c(1,2,3,4) # correct the mistaken '#4' to '#3'
+                                           , labels = c(1,2,3,3) ) 
+                 , stunted = factor( stunted
+                                     , levels= 1:0
+                                     , labels = c("stunted","non-stunted") )
+                 # , sexe = factor(sexe, labels = c("Male","Female"), levels = c("Masculin","FÃ©minin"))
+                 , sibo = (UFCml >= 200000)
+                 , age_years = cut( age
+                                    , breaks = c(24, 36, 48, 61)
+                                    , labels = c("2-3 years","3-4 years","4-5 years")
+                                    , include.lowest = TRUE
+                                    , right = TRUE
+                                    , dig.lab = 5
+                                    , ordered_result = TRUE )
+                 , dplyr::across( .cols = c("anemie","sibo","haz","haz2")
+                                  ,.fns = as.factor )
+  ) %>%
+  dplyr::filter( !SampleType %in% c("internalcontrol", "" ) & stunted != "" ) %>%
+  dplyr::rename( #Country  = pays,
+    calpro = calprotectinelevel
+    , aat    = alphaantitrypsinlevel
+    , anemia = anemie
+    , batch  = Analysisround ) %>%
+  #-- removing observations not supposed to exist
+  dplyr::filter( !((SampleType == "Duodenal" | SampleType == 'Gastric') & stunted == "non-stunted" ))
+
+###_- then turning to lowercase
+colnames(data_bile) = colnames(data_bile) %>%
+  tolower() %>%
+  gsub("sulfate", "sul", . ) %>%
+  gsub("dexy", "deoxy", . ) %>%
+  gsub("glucuronide","gluc", .)
+
+#- add a category lithoderivatives
+lithoderivatives<-unique(colnames(data_bile)[grep( pattern = "litho", colnames(data_bile))])
+lithoderivatives_r<-unique(lithoderivatives[grep( pattern = "_r", lithoderivatives)])
+data_bile$lithoderivatives_r = rowSums(data_bile[colnames(data_bile) %in% lithoderivatives_r])
+
+#- add a category urso
+urso<-unique(colnames(data_bile)[grep( pattern = "urso", colnames(data_bile))])
+urso_r<-unique(urso[grep( pattern = "_r", urso)])
+data_bile$urso_r = rowSums(data_bile[colnames(data_bile) %in% urso_r])
+
+#-- fixing column capitalization
+colnames(data_bile)[ colnames(data_bile) == "sampletype"] = "SampleType"
+
+#--correct the mistaken 'batch 4' to 'batch 3'
+data_bile$batch[which(data_bile$batch==4)] <- 3 
+
+#-- metadata columns
+meta_cols = colnames(data_bile)[c( 1:833, 999) ]
+Meta      = data_bile %>% dplyr::select( all_of( meta_cols ) ) #take metadata only
+
+#-- bile acid columns
+bile_cols = colnames(data_bile)[c( 834:998, 1000:1007) ]
+bile_acids      = data_bile %>% dplyr::select( all_of( bile_cols ) ) #take bile acid data only
+
+#--- only the relative abundance columns
+acids_rel_abund_col = colnames(data_bile)[ grep(pattern = "_r", colnames(data_bile))]
+acids_rel_abund_col <- setdiff(acids_rel_abund_col, meta_cols) #remove accidental metadata
+acids_rel_abund = data_bile %>% dplyr::select( all_of( bile_cols ) ) #take rel abundance bile acid data only
+
+#--- only the ratios
+acids_ratio_col = colnames(data_bile)[ grep(pattern = "ratio", colnames(data_bile))]
+acids_ratio = data_bile %>% dplyr::select( all_of( acids_ratio_col ) ) #take rel abundance bile acid data only
+
+#--- only the grouped as relative abundance
+bile_grouped_cols = colnames(data_bile)[c( 990:998, 1006:1007)]
+bile_acids_grouped      = data_bile %>% dplyr::select( all_of( bile_grouped_cols ) ) #take bile acid data only
+
+#--- only the single bile acids
+#only the single bile acids, no categories!
+single_bile_acids <- setdiff(acids_rel_abund_col, bile_grouped_cols)
+single_bile_acids
+
+X        = data_bile %>% dplyr::select( all_of(c( acids_rel_abund_col, meta_cols ) )) %>%
+  group_by(SampleType) %>%
+  filter(!duplicated(id)) %>% #for most downstream analyses, remove the technical duplicates
+  ungroup()
+X_grouped = data_bile %>% dplyr::select( all_of(c( bile_grouped_cols, meta_cols ) ))
+X_ratio = data_bile %>% dplyr::select( all_of(c( acids_ratio_col, meta_cols ) ))
+
+
+X_CAR= dplyr::filter(X, pays == "CAR")
+X_Mada= dplyr::filter(X, pays == "Madagascar")
+
+#subsets by sample type
+feces  = dplyr::filter(X, SampleType == "Feces")
+feces2 = dplyr::filter(feces, haz2!=1) #to compare only NN and MCS
+
+duodenal = dplyr::filter(X, SampleType=="Duodenal")
+gastric = dplyr::filter(X, SampleType=="Gastric")
+
+feces_CAR = dplyr::filter(X, (SampleType=="Feces" & pays=="CAR"))
+feces2_CAR = dplyr::filter(feces_CAR, haz2!=1) #to compare only NN and MCS
+feces_Mada = dplyr::filter(X, (SampleType=="Feces" & pays=="Madagascar"))
+feces2_Mada = dplyr::filter(feces_Mada, haz2!=1) #to compare only NN and MCS
+
+duodenal_CAR = dplyr::filter(X, (SampleType=="Duodenal" & pays=="CAR"))
+duodenal_Mada = dplyr::filter(X, (SampleType=="Duodenal" & pays=="Madagascar"))
+gastric_CAR= dplyr::filter(X, (SampleType=="Gastric" & pays=="CAR"))
+gastric_Mada = dplyr::filter(X, (SampleType=="Gastric" & pays=="Madagascar"))
+
+#check sample size by group #with duplicates excluded
+#BUT THE NUMBERS HERE ARE WAY LESS: WHAT HAVE I DONE??
+length(feces$id)
+length(duodenal$id)
+length(gastric$id)
+
+#count for flowchart
+dplyr::count(feces, pays, stunted)
+dplyr::count(duodenal, pays, stunted)
+dplyr::count(gastric, pays, stunted)
+
+#are there any samples missing bile acids data entirely? 
+bile_acids_nozeroes <- bile_acids
+bile_acids[is.na(bile_acids_nozeroes)] <- 0
+bile_acids_nozeroes[which(rowSums(bile_acids_nozeroes)==0),] #no they all have something
+
+```
+
+```{r datasets with dups for technical variation}
+
+#datasets with dups included
+X2        = data_bile %>% dplyr::select( all_of(c( acids_rel_abund_col, meta_cols ) ))
+X2_grouped = data_bile %>% dplyr::select( all_of(c( bile_grouped_cols, meta_cols ) ))
+X2_ratio = data_bile %>% dplyr::select( all_of(c( acids_ratio_col, meta_cols ) ))
+
+X2_CAR= dplyr::filter(X2, pays == "CAR")
+X2_Mada= dplyr::filter(X2, pays == "Madagascar")
+
+#subsets by sample type
+feces2  = dplyr::filter(X2, SampleType == "Feces")
+duodenal2 = dplyr::filter(X2, SampleType=="Duodenal")
+gastric2 = dplyr::filter(X2, SampleType=="Gastric")
+
+#only the people with technical duplicates
+dups <- data_bile %>%
+  group_by(SampleType) %>%
+  filter(duplicated(id)) %>%
+  select(id, SampleType)
+dups
+duplicate_samples <- data_bile %>% dplyr::select( all_of(c( acids_rel_abund_col, meta_cols ) )) %>%
+  filter(id %in% dups$id)
+
+
+```
+
+# Batch Effect
+
+```{r quantify batch effect whole dataset, echo=FALSE}
+#count samples
+dplyr::count(X, SampleType)
+
+#Batch effect by country (must be corrected)
+dplyr::count(X, batch, pays)
+fisher.test(as.factor(X$batch), X$pays) #sig
+chisq.test(as.factor(X$batch), X$pays) #sig
+
+#Batch effect by Sample Type (must be corrected)
+dplyr::count(X, batch, SampleType)
+#fisher.test(as.factor(X$batch), X$SampleType) #error
+chisq.test(X$batch, X$SampleType) #sig 
+#NOTE: this means that the sample types are UNEVENLY DISTRIBUTED BY BATCH - better to correct for batch within sample type
+
+#Batch effect by Stunting (must be corrected)
+dplyr::count(X, batch, stunted)
+fisher.test(as.factor(X$batch), as.factor(X$stunted)) #sig
+chisq.test(X$batch, X$stunted) #sig
+```
+
+```{r dup correlations uncorrected whole dataset}
+#determine how well technical duplicates correlate for the same bile acids
+#first: check the PCAs in the dataset that includes dups (should look similar)
+RelAbundsingle<-X2 %>% dplyr::select(all_of(single_bile_acids)) #take only the single bile acids
+
+#consider NAs to be zero
+# now impute the values which are NA or 0
+RelAbundsingle[RelAbundsingle<=0] <- NA # first convert all negative or 0 values in NA
+RelAbundsingle=data.frame(apply(RelAbundsingle,2,impute)) #and then impute them as half the minimum value (instead of zero)
+dim(RelAbundsingle)
+RelAbundsingle_log<-log10(RelAbundsingle)
+RelAbundsingle_log<-as.data.frame(RelAbundsingle_log) 
+
+#corresponding metadata 
+RelAbundsingle.meta <- X2  %>% dplyr::select(all_of(meta_cols))
+
+#Next: select only the samples that are dups and pivot the table
+dup_corr <- data.frame(RelAbundsingle_log, RelAbundsingle.meta) %>% #cleaned up data
+  filter(id %in% dups$id) %>% 
+  select(c(id, SampleType, batch, single_bile_acids))
+#not all duplicates were run in a separate batch: therefore define duplicate ids here
+#make a new 'batch' / dup variable 
+dup_corr$unique_id <- paste(dup_corr$id, dup_corr$SampleType, sep="_")
+dups1 <- dup_corr %>% filter(!(duplicated(dup_corr$unique_id)))
+dups2 <- dup_corr %>% filter(duplicated(dup_corr$unique_id))
+dups1$dup <- c("Duplicate1")
+dups2$dup <- c("Duplicate2")
+dup_corr2 <- full_join(dups1, dups2) %>% select(-c(unique_id, batch))
+
+dup_pdata <- dup_corr2 %>% 
+  pivot_longer(cols=c(3:(length(names(dup_corr2))-1)), 
+               names_to="BileAcid",values_to="RelAbund")
+
+dup_pdata2 <- dup_pdata %>% pivot_wider(names_from=dup, values_from=RelAbund)
+head(dup_pdata2)
+ndups <- length(dplyr::count(dup_pdata2, id, SampleType)$n)
+ndups
+#plot correlations across all sample types
+
+#pdf(width=4, height=4, "plots/S0_TechnicalDuplicates_NoCombat.pdf")
+p <- ggplot(dup_pdata2, aes(x=Duplicate1, y=Duplicate2, colour=BileAcid, shape=SampleType)) +
+  geom_point() +
+  geom_smooth(aes(group=FALSE), method='lm') +
+  guides(colour=FALSE) +
+  ggtitle("Duplicates Pre-Combat") +
+  theme_minimal()
+p
+#dev.off()
+
+```
+
+```{r Fig S2A-B quantify batch effect per sample type}
+#Not as bad as I remember it. Was it only in each individual subset that it was obvious?
+#PCA pre-combat, feces only #subset from the imputed data
+PCA_input <- data.frame(RelAbundsingle_log, RelAbundsingle.meta)
+RelAbundfeces <- PCA_input %>% filter(SampleType=="Feces") %>%
+  select(names(RelAbundsingle_log)) #select back the correct bile acid columns
+RelAbundfeces.meta <- RelAbundsingle.meta %>% filter(SampleType=="Feces") #and the corresponding metadata for plotting
+
+#get rid of columns that have zero variance!
+RelAbundfeces <- RelAbundfeces[- as.numeric(which(apply(RelAbundfeces, 2, var) == 0))]
+
+amp.pca.raw.feces <- prcomp(RelAbundfeces, scale=TRUE)
+summary(amp.pca.raw.feces)
+amp.pca.raw.feces$x[1]
+
+eig.val <- get_eigenvalue(amp.pca.raw.feces)
+eig.val$variance.percent
+
+#pdf("plots/S1B_PCA_feces_batch_precombat.pdf", width=5, height=5)
+pcaf <- ggbiplot(amp.pca.raw.feces,ellipse=FALSE,var.axes=FALSE) + 
+  geom_point(aes(fill=RelAbundfeces.meta$batch), 
+                    shape=21, size=4, colour="black") + 
+  ggtitle("Feces Pre-Combat") + 
+  theme_bw() + 
+  labs(fill="Batch") + xlab(paste("PC1 (", round(eig.val$variance.percent[1], 1), "%)", sep="")) + 
+  ylab(paste("PC2 (", round(eig.val$variance.percent[2], 1), "%)", sep=""))
+pcaf
+#dev.off()
+
+#duplicate correlations, feces only
+dups_pre_feces <- dup_pdata2 %>% filter(SampleType=="Feces")
+
+#pdf(width=3, height=3, "plots/S2B_TechnicalDuplicates_NoCombat_Feces.pdf")
+pf <- ggplot(dups_pre_feces, aes(x=Duplicate1, y=Duplicate2)) +
+  geom_point(aes(fill=id), 
+                    shape=21, size=3, alpha=0.5, colour="black") + 
+  geom_smooth(aes(group=FALSE), method='lm') +
+  guides(colour=FALSE, fill=FALSE) +
+  ggtitle("Feces Pre-Combat") +
+  theme_minimal()
+pf
+#dev.off()
+
+#PCA pre-combat, DUO only #subset from the imputed data
+RelAbundduo <- PCA_input %>% filter(SampleType=="Duodenal") %>%
+  select(names(RelAbundsingle)) #select back the correct bile acid columns
+RelAbundduo.meta <- RelAbundsingle.meta %>% filter(SampleType=="Duodenal") #and the corresponding metadata for plotting
+
+amp.pca.raw.duo <- prcomp(RelAbundduo, scale=TRUE)
+summary(amp.pca.raw.duo)
+amp.pca.raw.duo$x[1]
+
+eig.val <- get_eigenvalue(amp.pca.raw.duo)
+eig.val$variance.percent
+
+#pdf("plots/S1B_PCA_duo_batch_precombat.pdf", width=6, height=5)
+pcad <- ggbiplot(amp.pca.raw.duo,ellipse=FALSE,var.axes=FALSE) + 
+  geom_point(aes(fill=RelAbundduo.meta$batch), 
+                    shape=21, size=4, colour="black") + 
+  ggtitle("Duo. Pre-Combat") + 
+  theme_bw() + 
+  labs(fill="Batch") + xlab(paste("PC1 (", round(eig.val$variance.percent[1], 1), "%)", sep="")) + 
+  ylab(paste("PC2 (", round(eig.val$variance.percent[2], 1), "%)", sep=""))
+pcad
+#dev.off()
+
+dups_pre_duo <- dup_pdata2 %>% filter(SampleType=="Duodenal")
+
+#pdf(width=3, height=3, "plots/S2B_TechnicalDuplicates_NoCombat_Duo.pdf")
+pd <- ggplot(dups_pre_duo, aes(x=Duplicate1, y=Duplicate2)) +
+  geom_point(aes(fill=id), 
+                    shape=21, size=3, alpha=0.5, colour="black") +
+  geom_smooth(aes(group=FALSE), method='lm') +
+  guides(colour=FALSE, fill=FALSE) +
+  ggtitle("Duo. Pre-Combat") +
+  theme_minimal()
+pd
+#dev.off()
+
+#gastric samples pre-combat
+#PCA pre-combat, GASTRIC only #subset from the imputed data
+RelAbundGas <- PCA_input %>% filter(SampleType=="Gastric") %>%
+  select(names(RelAbundsingle)) #select back the correct bile acid columns
+RelAbundGas.meta <- RelAbundsingle.meta %>% filter(SampleType=="Gastric") #and the corresponding metadata for plotting
+
+amp.pca.raw.Gas <- prcomp(RelAbundGas, scale=TRUE)
+summary(amp.pca.raw.Gas)
+amp.pca.raw.Gas$x[1]
+
+eig.val <- get_eigenvalue(amp.pca.raw.Gas)
+eig.val$variance.percent
+
+#pdf("plots/S1B_PCA_Gas_batch_precombat.pdf", width=6, height=5)
+pcag <- ggbiplot(amp.pca.raw.Gas,ellipse=FALSE,var.axes=FALSE) + 
+  geom_point(aes(fill=RelAbundGas.meta$batch), 
+                    shape=21, size=4, colour="black") + 
+  ggtitle("Gas. Pre-Combat") + 
+  theme_bw() + 
+  labs(fill="Batch") + 
+  xlab(paste("PC1 (", round(eig.val$variance.percent[1], 1), "%)", sep="")) + 
+  ylab(paste("PC2 (", round(eig.val$variance.percent[2], 1), "%)", sep=""))
+pcag
+#dev.off()
+
+dups_pre_gas <- dup_pdata2 %>% filter(SampleType=="Gastric")
+
+#pdf(width=3, height=3, "plots/S2B_TechnicalDuplicates_NoCombat_Gas.pdf")
+pg <- ggplot(dups_pre_gas, aes(x=Duplicate1, y=Duplicate2)) +
+  geom_point(aes(fill=id), 
+                    shape=21, size=3, alpha=0.5, colour="black") +
+  geom_smooth(aes(group=FALSE), method='lm') +
+  guides(colour=FALSE, fill=FALSE) +
+  ggtitle("Gas. Pre-Combat") +
+  theme_minimal()
+pg
+#dev.off()
+
+# Add coord_fixed() to ensure the aspect ratio is fixed for all plots
+pcaf <- pcaf + coord_fixed(ratio=1)
+pcad <- pcad + coord_fixed(ratio=0.8) #because it's more rectangular
+pcag <- pcag + coord_fixed(ratio=0.5) #because it's more rectangular
+
+##arrange the PCAs more nicely in a row of 3
+#pdf(width=10, height=5, "plots/S2ABC_pcas.pdf")
+ggarrange(pcaf, pcad, pcag, ncol=3, nrow=1, 
+          widths=c(1,1,1),
+          heights=c(1,1,1),
+          common.legend=TRUE, legend='right')
+#dev.off()
+
+```
+
+```{r Fig S2C combat correct BY sample type}
+#feces combat correction
+#A: PCoA plus combat correction
+#X = all the bile acids from the full data_bile set.
+RelAbundsingle<- feces %>% dplyr::select(all_of(single_bile_acids)) #take only the single bile acids from FECES
+#remove bile acids that don't exist in that compartment
+RelAbundsingle<-RelAbundsingle[,!(colSums(RelAbundsingle, na.rm=TRUE)==0)]
+
+# now impute remaining values which are NA or 0
+RelAbundsingle[RelAbundsingle<=0] <- NA # first convert all negative or 0 values in NA
+RelAbundsingle=data.frame(apply(RelAbundsingle,2,impute)) 
+
+#View(RelAbundsingle)
+dim(RelAbundsingle)
+
+RelAbundsingle_log<-log10(RelAbundsingle)
+RelAbundsingle_log<-as.data.frame(RelAbundsingle_log) 
+
+#add back the metadata for combat
+RelAbundsingle.meta <- feces %>% dplyr::select(all_of(meta_cols))
+combat_input <- data.frame(RelAbundsingle_log, RelAbundsingle.meta)
+
+mod = model.matrix(~pays+as.factor(stunted), data=combat_input)
+batch=combat_input$batch
+
+RelAbundsingle_log_t <- as.data.frame(t(RelAbundsingle_log)) #transpose it for ComBat
+
+bile_combat_output <- ComBat(dat=RelAbundsingle_log_t, mod=mod, batch=batch) 
+bile_combat_output_t <- as.data.frame(t(bile_combat_output))
+
+bile_combat_output_meta <- data.frame(bile_combat_output_t, RelAbundsingle.meta)
+
+amp.pca.combat <- prcomp(bile_combat_output_t, scale=TRUE)
+summary(amp.pca.combat)
+amp.pca.combat$x[1]
+
+eig.val <- get_eigenvalue(amp.pca.combat)
+eig.val$variance.percent
+
+RelAbundsingle.metaF <- RelAbundsingle.meta
+#pdf("plots/S1H_PCA_FecesOnlyCombat_postcombat.pdf", width=6, height=5)
+pcaf <- ggbiplot(amp.pca.combat,ellipse=FALSE,var.axes=FALSE) + 
+  geom_point(aes(fill=RelAbundsingle.metaF$batch), shape=21, size=5, colour="black") + 
+  ggtitle("Feces Post-Combat") + 
+  theme_bw(base_size=16) + 
+  labs(fill="Batch") + xlab(paste("PC1 (", round(eig.val$variance.percent[1], 1), "%)", sep="")) + 
+  ylab(paste("PC2 (", round(eig.val$variance.percent[2], 1), "%)", sep=""))
+pcaf
+#dev.off()
+
+#Gastric only. 
+RelAbundsingle<-gastric %>% dplyr::select(all_of(single_bile_acids))
+RelAbundsingle<-RelAbundsingle[,!(colSums(RelAbundsingle, na.rm=TRUE)==0)] #remove all-zero bile acids
+RelAbundsingle[RelAbundsingle<=0] <- NA # first convert all negative or 0 values in NA
+RelAbundsingle=data.frame(apply(RelAbundsingle,2,impute)) 
+dim(RelAbundsingle)
+
+RelAbundsingle_log<-log10(RelAbundsingle)
+RelAbundsingle_log<-as.data.frame(RelAbundsingle_log) 
+
+#add back the metadata for combat
+RelAbundsingle.meta <- gastric %>% dplyr::select(all_of(meta_cols))
+combat_input <- data.frame(RelAbundsingle_log, RelAbundsingle.meta)
+
+mod = model.matrix(~pays, data=combat_input)
+batch=combat_input$batch
+
+RelAbundsingle_log_t <- as.data.frame(t(RelAbundsingle_log)) #transpose it for ComBat
+
+bile_combat_output <- ComBat(dat=RelAbundsingle_log_t, mod=mod, batch=batch) 
+bile_combat_output_t <- as.data.frame(t(bile_combat_output))
+
+bile_combat_output_meta <- data.frame(bile_combat_output_t, RelAbundsingle.meta)
+
+amp.pca.combat <- prcomp(bile_combat_output_t, scale=TRUE)
+summary(amp.pca.combat)
+amp.pca.combat$x[1]
+
+eig.val <- get_eigenvalue(amp.pca.combat)
+eig.val$variance.percent
+
+RelAbundsingle.metaG <- RelAbundsingle.meta
+#pdf("plots/S1D_PCA_GastricOnlyCombat_postcombat.pdf", width=6, height=5)
+pcag <- ggbiplot(amp.pca.combat,ellipse=FALSE,var.axes=FALSE) + 
+  geom_point(aes(fill=RelAbundsingle.metaG$batch), shape=21, size=5, colour="black") + 
+  ggtitle("Gas. Post-Combat") + 
+  theme_bw(base_size=16) + 
+  labs(fill="Batch") + xlab(paste("PC1 (", round(eig.val$variance.percent[1], 1), "%)", sep="")) + 
+  ylab(paste("PC2 (", round(eig.val$variance.percent[2], 1), "%)", sep=""))
+pcag
+#dev.off()
+
+#Duodenum only. 
+RelAbundsingle<-duodenal %>% dplyr::select(all_of(single_bile_acids))
+RelAbundsingle<-RelAbundsingle[,!(colSums(RelAbundsingle, na.rm=TRUE)==0)] #remove all-zero bile acids
+RelAbundsingle[RelAbundsingle<=0] <- NA # first convert all negative or 0 values in NA
+RelAbundsingle=data.frame(apply(RelAbundsingle,2,impute)) 
+dim(RelAbundsingle)
+
+RelAbundsingle_log<-log10(RelAbundsingle)
+RelAbundsingle_log<-as.data.frame(RelAbundsingle_log) 
+
+#add back the metadata for combat
+RelAbundsingle.meta <- duodenal %>% dplyr::select(all_of(meta_cols))
+combat_input <- data.frame(RelAbundsingle_log, RelAbundsingle.meta)
+
+mod = model.matrix(~pays, data=combat_input)
+batch=combat_input$batch
+
+RelAbundsingle_log_t <- as.data.frame(t(RelAbundsingle_log)) #transpose it for ComBat
+
+bile_combat_output <- ComBat(dat=RelAbundsingle_log_t, mod=mod, batch=batch) 
+bile_combat_output_t <- as.data.frame(t(bile_combat_output))
+
+bile_combat_output_meta <- data.frame(bile_combat_output_t, RelAbundsingle.meta)
+
+amp.pca.combat <- prcomp(bile_combat_output_t, scale=TRUE)
+summary(amp.pca.combat)
+amp.pca.combat$x[1]
+
+eig.val <- get_eigenvalue(amp.pca.combat)
+eig.val$variance.percent
+
+RelAbundsingle.metaD <- RelAbundsingle.meta
+#pdf("plots/S1F_PCA_DuodenumOnlyCombat_postcombat.pdf", width=6, height=5)
+pcad <- ggbiplot(amp.pca.combat,ellipse=FALSE,var.axes=FALSE) + 
+  geom_point(aes(fill=RelAbundsingle.metaD$batch), shape=21, size=5, colour="black") + 
+  ggtitle("Duo. Post-Combat") + 
+  theme_bw(base_size=16) + 
+  labs(fill="Batch") + xlab(paste("PC1 (", round(eig.val$variance.percent[1], 1), "%)", sep="")) +
+  ylab(paste("PC2 (", round(eig.val$variance.percent[2], 1), "%)", sep=""))
+pcad
+#dev.off()
+
+
+# Add coord_fixed() to ensure the aspect ratio is fixed for all plots
+pcaf <- pcaf + coord_fixed(ratio=1)
+pcad <- pcad + coord_fixed(ratio=1) #because it's more rectangular
+pcag <- pcag + coord_fixed(ratio=1.4) #because it's more rectangular
+
+##arrange the PCAs more nicely in a row of 3
+#pdf(width=10, height=5, "plots/S2C_postcombat_pcas.pdf")
+ggarrange(pcaf, pcad, pcag, ncol=3, nrow=1, 
+          widths=c(1,1,1),
+          heights=c(1,1,1),
+          common.legend=TRUE, legend='right')
+#dev.off()
+
+```
+
+```{r Fig S2D combat correct BY sample type - keep and quantify dups}
+#feces combat correction
+#A: PCoA plus combat correction
+#X = all the bile acids from the full data_bile set.
+RelAbundsingle<-feces2 %>% dplyr::select(all_of(single_bile_acids))  #take only the single bile acids from FECES
+#remove bile acids that don't exist in that compartment
+RelAbundsingle<-RelAbundsingle[,!(colSums(RelAbundsingle, na.rm=TRUE)==0)]
+
+# now impute remaining values which are NA or 0
+RelAbundsingle[RelAbundsingle<=0] <- NA # first convert all negative or 0 values in NA
+RelAbundsingle=data.frame(apply(RelAbundsingle,2,impute)) 
+
+#View(RelAbundsingle)
+dim(RelAbundsingle)
+
+RelAbundsingle_log<-log10(RelAbundsingle)
+RelAbundsingle_log<-as.data.frame(RelAbundsingle_log) 
+
+#add back the metadata for combat
+RelAbundsingle.meta <- feces2 %>% dplyr::select(all_of(meta_cols))
+combat_input <- data.frame(RelAbundsingle_log, RelAbundsingle.meta)
+
+mod = model.matrix(~pays+as.factor(stunted), data=combat_input)
+batch=combat_input$batch
+
+RelAbundsingle_log_t <- as.data.frame(t(RelAbundsingle_log)) #transpose it for ComBat
+
+bile_combat_output <- ComBat(dat=RelAbundsingle_log_t, mod=mod, batch=batch) 
+bile_combat_output_t <- as.data.frame(t(bile_combat_output))
+
+bile_combat_output_meta <- data.frame(bile_combat_output_t, RelAbundsingle.meta)
+
+##quantify the duplicate correlations post-combat, feces only.
+dup_corr_combat_F <- bile_combat_output_meta %>% #cleaned up data, post-combat
+  filter(id %in% dups$id) %>% 
+  select(c(id, SampleType, batch, names(RelAbundsingle_log)))
+#not all duplicates were run in a separate batch: therefore define duplicate ids here
+#make a new 'batch' / dup variable 
+dup_corr_combat_F$unique_id <- paste(dup_corr_combat_F$id, dup_corr_combat_F$SampleType, sep="_")
+dups1 <- dup_corr_combat_F %>% filter(!(duplicated(dup_corr_combat_F$unique_id)))
+dups2 <- dup_corr_combat_F %>% filter(duplicated(dup_corr_combat_F$unique_id))
+dups1$dup <- c("Duplicate1")
+dups2$dup <- c("Duplicate2")
+dup_corr_combat_F2 <- full_join(dups1, dups2) %>% select(-c(unique_id, batch))
+
+dup_pdata_combat_F <- dup_corr_combat_F2 %>% 
+  pivot_longer(cols=c(3:(length(names(dup_corr_combat_F2))-1)), 
+               names_to="BileAcid",values_to="RelAbund")
+
+dup_pdata2_combat_F <- dup_pdata_combat_F %>% pivot_wider(names_from=dup, values_from=RelAbund)
+head(dup_pdata2_combat_F)
+
+#plot correlations 
+#pdf(width=3, height=3, "plots/S2D_TechnicalDuplicates_PostCombatbySampleType_Feces.pdf")
+p <- ggplot(dup_pdata2_combat_F, aes(x=Duplicate1, y=Duplicate2, colour=BileAcid)) +
+  geom_point() +
+  geom_smooth(aes(group=FALSE), method='lm') +
+  guides(colour=FALSE) +
+  ggtitle("Feces Post-Combat") +
+  theme_minimal()
+p
+#dev.off()
+
+#Gastric only. 
+RelAbundsingle<-gastric2 %>% dplyr::select(all_of(single_bile_acids)) 
+RelAbundsingle<-RelAbundsingle[,!(colSums(RelAbundsingle, na.rm=TRUE)==0)] #remove all-zero bile acids
+RelAbundsingle[RelAbundsingle<=0] <- NA # first convert all negative or 0 values in NA
+RelAbundsingle=data.frame(apply(RelAbundsingle,2,impute)) 
+dim(RelAbundsingle)
+
+RelAbundsingle_log<-log10(RelAbundsingle)
+RelAbundsingle_log<-as.data.frame(RelAbundsingle_log) 
+
+#add back the metadata for combat
+RelAbundsingle.meta <- gastric2 %>% dplyr::select(all_of(meta_cols)) 
+combat_input <- data.frame(RelAbundsingle_log, RelAbundsingle.meta)
+
+mod = model.matrix(~pays, data=combat_input)
+batch=combat_input$batch
+
+RelAbundsingle_log_t <- as.data.frame(t(RelAbundsingle_log)) #transpose it for ComBat
+
+bile_combat_output <- ComBat(dat=RelAbundsingle_log_t, mod=mod, batch=batch) 
+bile_combat_output_t <- as.data.frame(t(bile_combat_output))
+
+bile_combat_output_meta <- data.frame(bile_combat_output_t, RelAbundsingle.meta)
+
+##quantify the duplicate correlations post-combat, gastric only.
+dup_corr_combat_G <- bile_combat_output_meta %>% #cleaned up data, post-combat
+  filter(id %in% dups$id) %>% 
+  select(c(id, SampleType, batch, names(RelAbundsingle_log)))
+#not all duplicates were run in a separate batch: therefore define duplicate ids here
+#make a new 'batch' / dup variable 
+dup_corr_combat_G$unique_id <- paste(dup_corr_combat_G$id, dup_corr_combat_G$SampleType, sep="_")
+dups1 <- dup_corr_combat_G %>% filter(!(duplicated(dup_corr_combat_G$unique_id)))
+dups2 <- dup_corr_combat_G %>% filter(duplicated(dup_corr_combat_G$unique_id))
+dups1$dup <- c("Duplicate1")
+dups2$dup <- c("Duplicate2")
+dup_corr_combat_G2 <- full_join(dups1, dups2) %>% select(-c(unique_id, batch))
+
+dup_pdata_combat_G <- dup_corr_combat_G2 %>% 
+  pivot_longer(cols=c(3:(length(names(dup_corr_combat_G2))-1)), 
+               names_to="BileAcid",values_to="RelAbund")
+
+dup_pdata2_combat_G <- dup_pdata_combat_G %>% pivot_wider(names_from=dup, values_from=RelAbund)
+head(dup_pdata2_combat_G)
+
+#plot correlations 
+pdf(width=3, height=3, "plots/S2D_TechnicalDuplicates_PostCombatbySampleType_Gas.pdf")
+p <- ggplot(dup_pdata2_combat_G, aes(x=Duplicate1, y=Duplicate2, colour=BileAcid)) +
+  geom_point() +
+  geom_smooth(aes(group=FALSE), method='lm') +
+  guides(colour=FALSE) +
+  ggtitle("Gas. Post-Combat") +
+  theme_minimal()
+p
+dev.off()
+
+#Duodenum only. 
+RelAbundsingle<-duodenal2 %>% dplyr::select(all_of(single_bile_acids)) 
+RelAbundsingle<-RelAbundsingle[,!(colSums(RelAbundsingle, na.rm=TRUE)==0)] #remove all-zero bile acids
+RelAbundsingle[RelAbundsingle<=0] <- NA # first convert all negative or 0 values in NA
+RelAbundsingle=data.frame(apply(RelAbundsingle,2,impute)) 
+dim(RelAbundsingle)
+
+RelAbundsingle_log<-log10(RelAbundsingle)
+RelAbundsingle_log<-as.data.frame(RelAbundsingle_log) 
+
+#add back the metadata for combat
+RelAbundsingle.meta <- duodenal2 %>% dplyr::select(all_of(meta_cols)) 
+combat_input <- data.frame(RelAbundsingle_log, RelAbundsingle.meta)
+
+mod = model.matrix(~pays, data=combat_input)
+batch=combat_input$batch
+
+RelAbundsingle_log_t <- as.data.frame(t(RelAbundsingle_log)) #transpose it for ComBat
+
+bile_combat_output <- ComBat(dat=RelAbundsingle_log_t, mod=mod, batch=batch) 
+bile_combat_output_t <- as.data.frame(t(bile_combat_output))
+
+bile_combat_output_meta <- data.frame(bile_combat_output_t, RelAbundsingle.meta)
+
+##quantify the duplicate correlations post-combat, duodenal only.
+dup_corr_combat_D <- bile_combat_output_meta %>% #cleaned up data, post-combat
+  filter(id %in% dups$id) %>% 
+  select(c(id, SampleType, batch, names(RelAbundsingle_log)))
+#not all duplicates were run in a separate batch: therefore define duplicate ids here
+#make a new 'batch' / dup variable 
+dup_corr_combat_D$unique_id <- paste(dup_corr_combat_D$id, dup_corr_combat_D$SampleType, sep="_")
+dups1 <- dup_corr_combat_D %>% filter(!(duplicated(dup_corr_combat_D$unique_id)))
+dups2 <- dup_corr_combat_D %>% filter(duplicated(dup_corr_combat_D$unique_id))
+dups1$dup <- c("Duplicate1")
+dups2$dup <- c("Duplicate2")
+dup_corr_combat_D2 <- full_join(dups1, dups2) %>% select(-c(unique_id, batch))
+
+dup_pdata_combat_D <- dup_corr_combat_D2 %>% 
+  pivot_longer(cols=c(3:(length(names(dup_corr_combat_D2))-1)), 
+               names_to="BileAcid",values_to="RelAbund")
+
+dup_pdata2_combat_D <- dup_pdata_combat_D %>% pivot_wider(names_from=dup, values_from=RelAbund)
+head(dup_pdata2_combat_D)
+
+#plot correlations 
+pdf(width=3, height=3, "plots/S2D_TechnicalDuplicates_PostCombatbySampleType_Duo.pdf")
+p <- ggplot(dup_pdata2_combat_D, aes(x=Duplicate1, y=Duplicate2, colour=BileAcid)) +
+  geom_point() +
+  geom_smooth(aes(group=FALSE), method='lm') +
+  guides(colour=FALSE) +
+  ggtitle("Duo. Post-Combat") +
+  theme_minimal()
+p
+dev.off()
+
+```
