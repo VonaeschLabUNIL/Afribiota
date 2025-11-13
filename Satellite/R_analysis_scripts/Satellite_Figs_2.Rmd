@@ -1,0 +1,914 @@
+---
+title: "Satellite Figures 2"
+author: "Simon Yersin"
+date: "2025-11-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load library
+```{r, warning=FALSE, message=FALSE}
+library(readxl)
+library(phyloseq)
+library(stringr)
+library(dplyr)
+library(tidyr)
+library(rstatix)
+library(ggplot2)
+library(usedist)
+library(vegan)
+library(ANCOMBC)
+library(microbiomeMarker)
+```
+
+# Load metadata tables
+```{r}
+md <- as.data.frame(read_xlsx("../Supplementary_files/SupplementaryTableS1.xlsx"))
+rownames(md) <- md$SampleID
+md_ps <- sample_data(md)
+```
+
+# Load MetaPhlAn profiles and create phyloseq
+Relative abundance
+```{r}
+tax_table <- as.data.frame(read_xlsx("../Supplementary_files/SupplementaryTableS3.xlsx", sheet = 2, skip = 1))
+
+## Create a taxonomy table
+# Obtain a table with only the tax names
+tax_names <- as.data.frame(str_split_fixed(tax_table$clade_name, "\\|[p,c,o,f,g,s,t]__", 8))
+tax_names[,1] <- str_remove(tax_names[,1], "k__")
+# Keeping only the rows with the complete taxonomy
+tax_names <- tax_names[-(which(tax_names[,8] == "")),] 
+# Changing colnames
+colnames(tax_names) <- c("Kingdom", "Phylum", "Class","Order","Family","Genus","Species", "SGB")
+# Adding the rownames
+tax_names <- tax_names %>%
+  mutate(SGB = paste("SGB", seq(1:nrow(tax_names)), sep=""))
+rownames(tax_names) <- tax_names$SGB
+asv_num <- tax_names$SGB
+tax_names <- tax_names[,-9]
+tax_names <- as.matrix(tax_names)
+# We have now a taxonomy table, similar than the one obtain with DADA2
+# Set as tax tablt phyloseq object
+taxonomy_table <- tax_table(tax_names)
+
+## Abundance table
+abun_table <- cbind(str_split_fixed(tax_table$clade_name, "\\|[p,c,o,f,g,s,t]__", 8),tax_table)
+abun_table <- as.data.frame(abun_table)
+abun_table[,1] <- str_remove(abun_table[,1], "k__")
+abun_table <- abun_table[-(which(abun_table[,8] == "")),] 
+rownames(abun_table) <- asv_num
+abun_table <- abun_table[,-c(1:9)]
+# We have now a table with the column being each sample
+# The row are the SGB assigned to a bacteria in the taxonomy table
+# Clear the column name
+colnames(abun_table) <- str_remove(colnames(abun_table), "_metaphlan")
+# Set as otu_table phyloseq object
+abun_table <- as.matrix(abun_table)
+class(abun_table) <- "numeric"
+abundance_table = otu_table(abun_table, taxa_are_rows = TRUE)
+
+# We have now a tax table and an otu table, we can create our phyloseq
+physeq <- phyloseq(taxonomy_table, abundance_table)
+
+physeq <- merge_phyloseq(physeq, md_ps)
+# 128 samples
+# 1998 taxa
+physeq_filtered <- physeq %>%
+  subset_taxa(Kingdom != "Eukaryota")
+# Removing taxa with abundance 0
+physeq_filtered <- prune_taxa(taxa_sums(physeq_filtered) > 0, physeq_filtered)
+physeq_ra <- transform_sample_counts(physeq_filtered, function(x) x / sum(x))
+# Removed 8 taxa by filtering
+
+# Cleaning environment
+rm(tax_names, abun_table, tax_table, physeq, abundance_table, taxonomy_table, asv_num)
+```
+
+Absolute counts
+```{r}
+tax_table_abs <- as.data.frame(read_xlsx("../Supplementary_files/SupplementaryTableS3.xlsx", sheet = 3))
+
+## Create a taxonomy table
+# Obtain a table with only the tax names
+tax_names_abs <- str_split_fixed(tax_table_abs$clade_name, "\\|[p,c,o,f,g,s,t]__", 8)
+tax_names_abs <- as.data.frame(tax_names_abs)
+tax_names_abs[,1] <- str_remove(tax_names_abs[,1], "k__")
+# Keeping only the rows with the complete taxonomy
+tax_names_abs <- tax_names_abs[-(which(tax_names_abs[,8] == "")),] 
+# Changing colnames
+colnames(tax_names_abs) <- c("Kingdom", "Phylum", "Class","Order","Family","Genus","Species", "SGB")
+# Adding the rownames
+tax_names_abs <- tax_names_abs %>%
+  mutate(SGB = paste("SGB", seq(1:nrow(tax_names_abs)), sep=""))
+rownames(tax_names_abs) <- tax_names_abs$SGB
+asv_num_abs <- tax_names_abs$SGB
+tax_names_abs <- tax_names_abs[,-9]
+tax_names_abs <- as.matrix(tax_names_abs)
+# We have now a taxonomy table, similar than the one obtain with DADA2
+# Set as tax table phyloseq object
+taxonomy_table_abs <- tax_table(tax_names_abs)
+
+## Abundance table
+abs_abun_table <- cbind(str_split_fixed(tax_table_abs$clade_name, "\\|[p,c,o,f,g,s,t]__", 8),tax_table_abs)
+abs_abun_table <- as.data.frame(abs_abun_table)
+abs_abun_table[,1] <- str_remove(abs_abun_table[,1], "k__")
+abs_abun_table <- abs_abun_table[-(which(abs_abun_table[,8] == "")),] 
+rownames(abs_abun_table) <- asv_num_abs
+abs_abun_table <- abs_abun_table[,-c(1:10)]
+# We have now a table with the column being each sample
+# The row are the SGB assigned to a bacteria in the taxonomy table
+# Clear the column name
+colnames(abs_abun_table) <- str_remove(colnames(abs_abun_table), "_metaphlan_profile")
+# Set as otu_table phyloseq object
+abs_abun_table <- as.matrix(abs_abun_table)
+class(abs_abun_table) <- "numeric"
+abs_abundance_table = otu_table(abs_abun_table, taxa_are_rows = TRUE)
+
+# We have now a tax table and an otu table, we can create our phyloseq
+physeq_abs <- phyloseq(taxonomy_table_abs, abs_abundance_table)
+
+physeq_abs <- merge_phyloseq(physeq_abs, md_ps)
+# 128 samples
+# 1998 taxa
+#Absolute abundance
+physeq_abs_filtered <- physeq_abs %>%
+  subset_taxa(Kingdom != "Eukaryota")
+# Removing taxa with abundance 0
+physeq_abs_filtered <- prune_taxa(taxa_sums(physeq_abs_filtered) > 0, physeq_abs_filtered)
+# Removed 8 taxa by filtering
+
+# Cleaning environment
+rm(tax_names_abs, abs_abun_table, tax_table_abs, physeq_abs, abs_abundance_table, taxonomy_table_abs, asv_num_abs)
+```
+
+# Palette
+Color palette
+```{r}
+# Set color palette
+pal_body_sites <- c("#EDE692","#DCC04B", "#BBDEEC" ,"#9AB9C2")
+pal_beta <- c("#BBDEEC","#9AB9C2","#DCC04B","#EDE692")
+
+# Bar plots color palette
+pal_saliva <- c("#377EB8","#8DD3C7","#4DAF4A","#FFFFB3","#FB8072","#80B1D3","#B3DE69",
+                "#A65628","#F781BF","#E5C494","#FCCDE5","#7FC97F","#FDC086","#666666",
+                "#c27ba0","#D95F02","#7570B3","#E7298A","#66A61E","#E6AB02","#6fa8dc")
+
+pal_gastric <- c("#377EB8","#4DAF4A","#E41A1C","#80B1D3","#B3DE69","#A65628","#F781BF",
+                "#9FCAF9","#18af11","#E5C494","#FCCDE5","#FFED6F","#7FC97F","#BEAED4",
+                "#FDC086","#666666","#D95F02","#7570B3","#E7298A","#E6AB02","#6fa8dc")
+
+pal_duodenum <- c("#377EB8","#4DAF4A","#FF7F00","#BC80BD","#FB8072","#80B1D3","#B3DE69",
+                "#A65628","#F781BF","#FFFF33","#E5C494","#FCCDE5","#BEAED4","#FDC086",
+                "#666666","#c27ba0","#D95F02","#7570B3","#E7298A","#E6AB02","#6fa8dc")
+
+pal_feces <- c("#997EB8","#9CCCC9","#D41A1C","#A69972","#FFFFB3","#FA9909","#96C60E",
+               "#F77199","#E9F199","#AAEEFF","#DF099A","#CACAD9","#B3DE99","#9fc5e8",
+               "#666666","#ea9919","#e06666","#f1c232","#c27ba0","#93aa7d","#45818e")
+```
+
+# Figure 2
+## Supplementary table S3 - sheet AlphaDiversity - FecesSeqBatch
+```{r}
+# Agglomeration at species level
+physeq_sp_abs <- tax_glom(physeq_abs_filtered, taxrank = "Species")
+physeq_sp_abs <- prune_taxa(taxa_sums(physeq_sp_abs)> 0, physeq_sp_abs)
+# 1906 species in the dataset
+
+# Alpha diversity
+results_adiv <- estimate_richness(physeq_sp_abs)
+results_adiv <- results_adiv %>%
+  mutate(SampleID = rownames(results_adiv))
+results_adiv <- merge(results_adiv, md, by = "SampleID")
+
+# Wilcoxon tests
+results_adiv_long <- results_adiv %>%
+  pivot_longer(cols = c("Observed", "Shannon", "Simpson", "InvSimpson"),
+               names_to = "Metric", values_to = "value")
+
+S3_AlphaDiversity <- results_adiv_long %>%
+  group_by(Metric) %>%
+  pairwise_wilcox_test(
+    value ~ Body_site,
+    p.adjust.method = "BH"
+  ) %>%
+  # Add effect size for each Metric and pair
+  left_join(
+    results_adiv_long %>%
+      group_by(Metric) %>%
+      wilcox_effsize(value ~ Body_site),
+    by = c("Metric", "group1", "group2")
+  )
+
+# Sequencing batch test
+results_fe <- results_adiv %>%
+  filter(Body_site == "Feces")
+wilcox.test(Observed ~ Sequencing_Batch, data = results_fe)
+wilcox.test(Shannon ~ Sequencing_Batch, data = results_fe)
+wilcox.test(Simpson ~ Sequencing_Batch, data = results_fe)
+wilcox.test(InvSimpson ~ Sequencing_Batch, data = results_fe)
+
+rm(results_adiv, results_adiv_long, results_fe)
+```
+
+## Figure 2A
+```{r}
+md_alpha <- as.matrix(sample_data(physeq_sp_abs))
+body_site_levels <- c("Saliva", "Gastric", "Duodenum", "Feces")
+body_site_data <- data.frame(
+  Body_site = body_site_levels,
+  bs_num = 1:length(body_site_levels))
+md_alpha <- as.data.frame(md_alpha)
+md_alpha <- dplyr::left_join(md_alpha, body_site_data, by= "Body_site")
+sample_data(physeq_sp_abs) <- cbind(sample_data(physeq_sp_abs), md_alpha$bs_num)
+colnames(sample_data(physeq_sp_abs))[35] <- "bs_num"
+
+fig2a <- plot_richness(physeq_sp_abs, x= "bs_num",
+                               measures=c("Observed", "Shannon", "InvSimpson"),
+                               color = "Body_site") +
+  scale_x_continuous(breaks=1:length(body_site_levels), labels=body_site_levels) +
+  scale_color_manual(name= "Body sites", values = pal_body_sites) +
+  geom_boxplot(aes(x = bs_num, y = value), alpha = 0.1) +
+  xlab("Body site") +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 14),
+    axis.text.y = element_text(size = 14),
+    axis.title.y = element_text(size = 14),
+    axis.title.x = element_blank(),
+    plot.title = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 14),
+    strip.text = element_text(size = 14),
+    legend.position = "bottom"
+  ) +
+  guides(color = guide_legend(nrow = 2))
+
+fig2a
+
+rm(md_alpha, body_site_levels, body_site_data, physeq_sp_abs)
+```
+
+## Supplementary table S3 - sheet PERMANOVA_PCoA
+```{r}
+physeq_bdiv <- physeq_ra
+
+# Bray-Curtis
+dist.bc <- phyloseq::distance(physeq_bdiv, method = "bray")
+
+# Permanova
+meta_pcoa = as.matrix(sample_data(physeq_bdiv))
+meta_pcoa <- as.data.frame(meta_pcoa)
+permanova_all <- vegan::adonis2(dist.bc ~ Body_site, data = meta_pcoa, permutations = 9999) # Significant
+
+# Does stunting level explain some of the variation?
+vegan::adonis2(dist.bc ~ Body_site + Stunting_level,
+                                data = meta_pcoa,permutations = 9999, by="terms") # Significant
+# Gastric and Duodenum cluster together
+# Saliva group away from gastric-duodenal
+# structure of the anova table
+permanova_all$`Pr(>F)` # 1e-04
+
+pairwise_p <- numeric()
+# Pairwise comparison
+fe_sa_ado <- meta_pcoa %>% filter(Body_site == "Feces" | Body_site == "Saliva")
+fe_sa_ado_dist <- dist_subset(dist.bc, fe_sa_ado$SampleID)
+fe_sa_tado <- adonis2(fe_sa_ado_dist ~ Body_site, data = fe_sa_ado,permutations = 1000)
+pairwise_p["FE_SA"] <- fe_sa_tado$`Pr(>F)`[1]
+
+fe_ga_ado <- meta_pcoa %>% filter(Body_site == "Feces" | Body_site == "Gastric")
+fe_ga_ado_dist <- dist_subset(dist.bc, fe_ga_ado$SampleID)
+fe_ga_tado <- adonis2(fe_ga_ado_dist ~ Body_site, data = fe_ga_ado,permutations = 1000)
+pairwise_p["FE_GA"] <- fe_ga_tado$`Pr(>F)`[1]
+
+fe_du_ado <- meta_pcoa %>% filter(Body_site == "Feces" | Body_site == "Duodenum")
+fe_du_ado_dist <- dist_subset(dist.bc, fe_du_ado$SampleID)
+fe_du_tado <- adonis2(fe_du_ado_dist ~ Body_site, data = fe_du_ado,permutations = 1000)
+pairwise_p["FE_DU"] <- fe_du_tado$`Pr(>F)`[1]
+
+ga_sa_ado <- meta_pcoa %>% filter(Body_site == "Gastric" | Body_site == "Saliva")
+ga_sa_ado_dist <- dist_subset(dist.bc, ga_sa_ado$SampleID)
+ga_sa_tado <- adonis2(ga_sa_ado_dist ~ Body_site, data = ga_sa_ado,permutations = 1000)
+pairwise_p["GA_SA"] <- ga_sa_tado$`Pr(>F)`[1]
+
+du_ga_ado <- meta_pcoa %>% filter(Body_site == "Duodenum" | Body_site == "Saliva")
+du_ga_ado_dist <- dist_subset(dist.bc, du_ga_ado$SampleID)
+du_ga_tado <- adonis2(du_ga_ado_dist ~ Body_site, data = du_ga_ado,permutations = 1000)
+pairwise_p["DU_SA"] <- du_ga_tado$`Pr(>F)`[1]
+
+ga_du_ado <- meta_pcoa %>% filter(Body_site == "Gastric" | Body_site == "Duodenum")
+ga_du_ado_dist <- dist_subset(dist.bc, ga_du_ado$SampleID)
+ga_du_tado <- adonis2(ga_du_ado_dist ~ Body_site, data = ga_du_ado,permutations = 1000)
+pairwise_p["GA_DU"] <- ga_du_tado$`Pr(>F)`[1]
+
+pairwise_padj <- p.adjust(pairwise_p, method = "BH")
+S3_PERMANOVA_PCoA <- as.data.frame(pairwise_padj)
+
+rm(meta_pcoa, permanova_all, pairwise_p, fe_sa_ado,fe_sa_ado_dist, fe_sa_tado, ga_sa_ado, ga_sa_ado_dist, ga_sa_tado,
+   fe_ga_ado,fe_ga_ado_dist, fe_ga_tado,  fe_du_ado, fe_du_ado_dist, fe_du_tado,
+   du_ga_ado, du_ga_ado_dist, du_ga_tado, ga_du_ado, ga_du_ado_dist, ga_du_tado, pairwise_padj)
+```
+
+## Figure 2B
+```{r}
+# PCoA
+test_PCoAbray <- ordinate(physeq_bdiv, "PCoA", distance = dist.bc)
+
+physeq_bdiv@sam_data$Stunting_level <- factor(physeq_bdiv@sam_data$Stunting_level,
+                                            levels = c("Normal_growth", "Mild_stunting", "Moderate_stunting", "Severe_stunting"),
+                                            labels = c("Normal growth", "Mild stunting", "Moderate stunting", "Severe stunting"))
+
+fig2b <- plot_ordination(physeq_bdiv, test_PCoAbray, type = "samples", color = "Body_site", shape = "Stunting_level") +
+  geom_point(size = 3) +
+  theme_bw() +
+  scale_shape_manual(values=c(15:18)) +
+  scale_color_manual(values = pal_beta) +
+  labs(shape = "Nutritional status", color = "Body sites") +
+  theme(
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    axis.title = element_text(size = 14),
+    plot.title = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 14),
+    strip.text = element_text(size = 14)
+    )
+fig2b
+```
+
+## Supplementary table S3 - sheet EnvFit
+```{r}
+# Test on 3 axis
+vectorPCOA <- as.data.frame(test_PCoAbray$vectors[,1:3])
+# Get metadata
+META_envfit = as(sample_data(physeq_ra), "matrix")
+meta_envfit <- as.data.frame(META_envfit)
+# Covariates:
+envfit_sd <- meta_envfit[, c("sexe", "Delivery_mode", "lait_enf", "age_allaite",
+                "eau_traitee", "nb_repas", "alim_malnut", "haz", "Stunting_level",
+                "Stunting_status", "parasite", "Gut_inflammation_AAT", "Gut_inflammation_Calpro",
+                "Systemic_inflammation", "ferritine_seuil", "body_site")]
+
+env.fit_results <- envfit(vectorPCOA, envfit_sd, perm = 999, na.rm=TRUE)
+S3_EnvFit <- as.data.frame(cbind(unique(env.fit_results$factor$var.id), env.fit_results$factors$pvals, env.fit_results$factors$r))
+
+# Variance mostly explained by body site (make sense)
+# Only one significant 
+
+rm(vectorPCOA, test_PCoAbray, dist.bc, meta_envfit, META_envfit)
+```
+
+## Supplementary table S3 - sheet FecesSeqBatch
+```{r}
+physeq_ra_fe <- subset_samples(physeq_ra, Body_site == "Feces")
+dist.bc_fe <- phyloseq::distance(physeq_ra_fe, method = "bray")
+meta_pcoa_fe = as.matrix(sample_data(physeq_ra_fe))
+meta_pcoa_fe <- as.data.frame(meta_pcoa_fe)
+S3_FecesSeqBatch <- vegan::adonis2(dist.bc_fe ~ Sequencing_Batch, data = meta_pcoa_fe, permutations = 9999) # Not significant
+
+rm(physeq_ra_fe,dist.bc_fe, meta_pcoa_fe)
+```
+
+## Figure 2C
+```{r}
+# Bray-Curtis
+physeq_ra_gd <- subset_samples(physeq_bdiv, Body_site == "Duodenum" | Body_site == "Gastric")
+dist.bc_gd <- phyloseq::distance(physeq_ra_gd, method = "bray")
+test_PCoAbray_gd <- ordinate(physeq_ra_gd, "PCoA", distance = dist.bc_gd)
+
+fig2c <- plot_ordination(physeq_ra_gd, test_PCoAbray_gd, type = "samples", color = "Body_site", shape = "Stunting_level") +
+  geom_point(size = 3) +
+  theme_bw() +
+  scale_shape_manual(values=c(15:18)) +
+  scale_color_manual(values = pal_beta[c(1,3)]) +
+  labs(shape = "Nutritional status", color = "Body sites") +
+  theme(
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    axis.title = element_text(size = 14),
+    plot.title = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 14),
+    strip.text = element_text(size = 14),
+    )
+
+fig2c
+rm(physeq_ra_gd, dist.bc_gd, test_PCoAbray_gd, physeq_bdiv)
+```
+
+## Supplementary table S3 - Saliva_RA_gen
+```{r}
+ps_ra_saliva <- subset_samples(physeq_ra, Body_site =="Saliva")
+ps_ra_saliva <- prune_taxa(taxa_sums(ps_ra_saliva)> 0, ps_ra_saliva)
+ps_ra_saliva_gen <- tax_glom(ps_ra_saliva, "Genus") # 221 genera
+
+# Get percentage
+S3_Saliva_RA_gen <- as.data.frame(tax_table(ps_ra_saliva_gen))[,c(2,6)]
+S3_Saliva_RA_gen <- S3_Saliva_RA_gen %>%
+  mutate(Rel_abun = round(100*apply(otu_table(ps_ra_saliva_gen), 1, mean), digits = 3),
+         Standard_dev = round(100*apply(otu_table(ps_ra_saliva_gen), 1, sd), digits = 3))
+```
+
+## Supplementary table S3 - Saliva_RA_sp
+```{r}
+ps_ra_saliva_sp <- tax_glom(ps_ra_saliva, "Species") 
+S3_Saliva_RA_sp <- as.data.frame(tax_table(ps_ra_saliva_sp))[,c(6,7)]
+S3_Saliva_RA_sp <- S3_Saliva_RA_sp %>%
+  mutate(Rel_abun = round(100*apply(otu_table(ps_ra_saliva_sp), 1, mean), digits = 3),
+         Standard_dev = round(100*apply(otu_table(ps_ra_saliva_sp), 1, sd), digits = 3))
+```
+
+## Figure 2D
+```{r}
+TopGen_sal <- names(sort(taxa_sums(ps_ra_saliva_gen), TRUE)[1:20])
+SalGen20 <- prune_taxa(TopGen_sal, ps_ra_saliva_gen)
+topotuG_sal <- otu_table(SalGen20)
+toptaxaG_sal <- tax_table(SalGen20)
+SalGen20 = phyloseq(topotuG_sal, toptaxaG_sal)
+SalGen20 = merge_phyloseq(sample_data(ps_ra_saliva_gen), SalGen20)
+# Grouping other Genus
+OtherG_sal <- names(sort(taxa_sums(ps_ra_saliva_gen), TRUE)[c(21:221)])
+SalG_other <- prune_taxa(OtherG_sal, ps_ra_saliva_gen)
+others_otu_sal <- t(as.matrix(apply(otu_table(SalG_other), 2, sum)))
+rownames(others_otu_sal) <- "Others Genera"
+others_otu_sal=otu_table(others_otu_sal, taxa_are_rows = TRUE)
+other_taxG_sal <- c("Others", "Others","Others","Others","Others","Others","Others", "Others")
+other_taxG_sal <- as.matrix(other_taxG_sal)
+rownames(other_taxG_sal) <- colnames(tax_table(SalG_other))
+other_taxG_sal <- t(other_taxG_sal)
+rownames(other_taxG_sal) <- "Others Genera"
+other_taxG_sal =  tax_table(other_taxG_sal)
+others_salG= phyloseq(others_otu_sal,other_taxG_sal)
+others_salG = merge_phyloseq(sample_data(ps_ra_saliva_gen), others_salG)
+others_salG
+# Regrouping phyloseq
+salG <- merge_phyloseq(SalGen20, others_salG)
+salG_melt <- psmelt(salG)
+
+# Fix unassigned SGB names to higher taxonomic ranks
+salG_melt <- salG_melt %>%
+  mutate(Name = case_when(
+    str_detect(Genus, "GGB", negate = TRUE) ~ Genus,
+    str_detect(Genus, "GGB", negate = FALSE) ~ paste(Genus, Family)
+  ))
+
+salG_melt$Stunting_status[which(salG_melt$Stunting_status=="Non_stunted")] <- "Non-stunted"
+
+fig2d <- salG_melt %>%
+  ggplot(aes_string(x = "SampleID", y = "Abundance", fill = "Name")) +
+  geom_bar(stat = "identity", position = "stack") + 
+  facet_grid(~Stunting_status, scales = "free_x") +
+  scale_fill_manual(values = pal_saliva) +
+  theme_bw() + 
+  theme(legend.position = "right", 
+        axis.title.x=element_blank(),
+        axis.text.x=element_text(angle = 60, hjust = 1),
+        axis.ticks.x=element_blank()) +
+  guides(fill=guide_legend(ncol=2))+
+  ylab("Relative abundance")+
+  labs(fill = "Genus") +
+  theme(
+    axis.text.x =  element_blank(),
+    axis.text.y = element_text(size = 11),
+    axis.title = element_text(size = 11),
+    plot.title = element_text(size = 11),
+    legend.title = element_text(size = 11),
+    legend.text = element_text(size = 11, face = 3),
+    strip.text = element_text(size = 11)) +
+  ggtitle("Oral microbiota composition")
+
+fig2d
+
+rm(salG_melt, salG, SalGen20, SalG_other, other_taxG_sal, others_otu_sal, others_salG, OtherG_sal,
+   TopGen_sal, topotuG_sal, toptaxaG_sal, ps_ra_saliva, ps_ra_saliva_gen, ps_ra_saliva_sp)
+```
+
+## Supplementary table S3 - Gastric_RA_gen
+```{r}
+ps_ra_ga <- subset_samples(physeq_ra, Body_site =="Gastric")
+ps_ra_ga <- prune_taxa(taxa_sums(ps_ra_ga)> 0, ps_ra_ga)
+ps_ra_ga_gen <- tax_glom(ps_ra_ga, "Genus") # 191 genera
+# Relative abundance 
+S3_Gastric_RA_gen <- as.data.frame(tax_table(ps_ra_ga_gen))[,c(2,6)]
+S3_Gastric_RA_gen <- S3_Gastric_RA_gen %>%
+  mutate(Rel_abun = round(100*apply(otu_table(ps_ra_ga_gen), 1, mean), digits = 3),
+         Standard_dev = round(100*apply(otu_table(ps_ra_ga_gen), 1, sd), digits = 3))
+```
+
+## Supplementary table S3 - Gastric_RA_sp
+```{r}
+ps_ra_ga_sp <- tax_glom(ps_ra_ga, "Species") 
+S3_Gastric_RA_sp <- as.data.frame(tax_table(ps_ra_ga_sp))[,c(6,7)]
+S3_Gastric_RA_sp <- S3_Gastric_RA_sp %>%
+  mutate(Rel_abun = round(100*apply(otu_table(ps_ra_ga_sp), 1, mean), digits = 3),
+         Standard_dev = round(100*apply(otu_table(ps_ra_ga_sp), 1, sd), digits = 3))
+```
+
+## Figure 2E
+```{r}
+# Top 20 Genera
+TopGen_ga <- names(sort(taxa_sums(ps_ra_ga_gen), TRUE)[1:20])
+gaGen20 <- prune_taxa(TopGen_ga, ps_ra_ga_gen)
+topotuG_ga <- otu_table(gaGen20)
+toptaxaG_ga <- tax_table(gaGen20)
+gaGen20 = phyloseq(topotuG_ga, toptaxaG_ga)
+gaGen20 = merge_phyloseq(sample_data(ps_ra_ga_gen), gaGen20)
+# Grouping other Genilies
+OtherG_ga <- names(sort(taxa_sums(ps_ra_ga_gen), TRUE)[c(21:191)])
+gaG_other <- prune_taxa(OtherG_ga, ps_ra_ga_gen)
+others_otu_ga <- t(as.matrix(apply(otu_table(gaG_other), 2, sum)))
+rownames(others_otu_ga) <- "Others Genera"
+others_otu_ga=otu_table(others_otu_ga, taxa_are_rows = TRUE)
+other_taxG_ga <- c("Others", "Others","Others","Others","Others","Others","Others", "Others")
+other_taxG_ga <- as.matrix(other_taxG_ga)
+rownames(other_taxG_ga) <- colnames(tax_table(gaG_other))
+other_taxG_ga <- t(other_taxG_ga)
+rownames(other_taxG_ga) <- "Others Genera"
+other_taxG_ga =  tax_table(other_taxG_ga)
+others_gaG= phyloseq(others_otu_ga,other_taxG_ga)
+others_gaG = merge_phyloseq(sample_data(ps_ra_ga_gen), others_gaG)
+others_gaG
+# Regrouping phyloseq
+gaG <- merge_phyloseq(gaGen20, others_gaG)
+gaG_melt <- psmelt(gaG)
+
+gaG_melt <- gaG_melt %>%
+  mutate(Name = case_when(
+    str_detect(Genus, "GGB", negate = TRUE) ~ Genus,
+    str_detect(Genus, "GGB", negate = FALSE) ~ paste(Genus, Family)
+  ))
+
+gaG_melt$Stunting_status[which(gaG_melt$Stunting_status=="Non_stunted")] <- "Non-stunted"
+
+fig2e <- gaG_melt %>%
+  ggplot(aes_string(x = "SampleID", y = "Abundance", fill = "Name")) +
+  geom_bar(stat = "identity", position = "stack") + 
+  facet_grid(~Stunting_status, scales = "free_x") +
+  scale_fill_manual(values = pal_gastric) +
+  theme_bw() + 
+  theme(legend.position = "right", 
+        axis.title.x=element_blank(),
+        axis.text.x=element_text(angle = 60, hjust = 1),
+        axis.ticks.x=element_blank()) +
+  guides(fill=guide_legend(ncol=2))+
+  ylab("Relative abundance")+
+  ggtitle("Gastric microbiota composition")+
+  labs(fill = "Genus") +
+  theme(
+    axis.text.x =  element_blank(),
+    axis.text.y = element_text(size = 11),
+    axis.title = element_text(size = 11),
+    plot.title = element_text(size = 11),
+    legend.title = element_text(size = 11),
+    legend.text = element_text(size = 11, face = 3),
+    strip.text = element_text(size = 11))
+
+fig2e
+rm(gaG_melt, gaG, gaGen20, gaG_other, other_taxG_ga, others_otu_ga, others_gaG, OtherG_ga,
+   TopGen_ga, topotuG_ga, toptaxaG_ga, ps_ra_ga_gen, ps_ra_ga, ps_ra_ga_sp)
+```
+
+## Supplementary table S3 - Duodenum_RA_gen
+```{r}
+ps_ra_du <- subset_samples(physeq_ra, Body_site =="Duodenum" )
+ps_ra_du <- prune_taxa(taxa_sums(ps_ra_du)> 0, ps_ra_du)
+ps_ra_du_gen <- tax_glom(ps_ra_du, "Genus") # 177 genera
+S3_Duodenum_RA_gen <- as.data.frame(tax_table(ps_ra_du_gen))[,c(2,6)]
+S3_Duodenum_RA_gen <- S3_Duodenum_RA_gen %>%
+  mutate(Rel_abun = round(100*apply(otu_table(ps_ra_du_gen), 1, mean), digits = 3),
+         Standard_dev = round(100*apply(otu_table(ps_ra_du_gen), 1, sd), digits = 3))
+```
+
+## Supplementary table S3 - Duodenum_RA_sp
+```{r}
+ps_ra_du_sp <- tax_glom(ps_ra_du, "Species") 
+S3_Duodenum_RA_sp <- as.data.frame(tax_table(ps_ra_du_sp))[,c(6,7)]
+S3_Duodenum_RA_sp <- S3_Duodenum_RA_sp %>%
+  mutate(Rel_abun = round(100*apply(otu_table(ps_ra_du_sp), 1, mean), digits = 3),
+         Standard_dev = round(100*apply(otu_table(ps_ra_du_sp), 1, sd), digits = 3))
+```
+
+## Figure 2E bis
+```{r}
+# Top 20 Genera
+TopGen_du <- names(sort(taxa_sums(ps_ra_du_gen), TRUE)[1:20])
+duGen20 <- prune_taxa(TopGen_du, ps_ra_du_gen)
+topotuG_du <- otu_table(duGen20)
+toptaxaG_du <- tax_table(duGen20)
+duGen20 = phyloseq(topotuG_du, toptaxaG_du)
+duGen20 = merge_phyloseq(sample_data(ps_ra_du_gen), duGen20)
+# Grouping other genera
+OtherG_du <- names(sort(taxa_sums(ps_ra_du_gen), TRUE)[c(21:177)])
+duG_other <- prune_taxa(OtherG_du, ps_ra_du_gen)
+others_otu_du <- t(as.matrix(apply(otu_table(duG_other), 2, sum)))
+rownames(others_otu_du) <- "Others Genera"
+others_otu_du=otu_table(others_otu_du, taxa_are_rows = TRUE)
+other_taxG_du <- c("Others", "Others","Others","Others","Others","Others","Others", "Others")
+other_taxG_du <- as.matrix(other_taxG_du)
+rownames(other_taxG_du) <- colnames(tax_table(duG_other))
+other_taxG_du <- t(other_taxG_du)
+rownames(other_taxG_du) <- "Others Genera"
+other_taxG_du =  tax_table(other_taxG_du)
+others_duG= phyloseq(others_otu_du,other_taxG_du)
+others_duG = merge_phyloseq(sample_data(ps_ra_du_gen), others_duG)
+others_duG
+# Regrouping phyloseq
+duG <- merge_phyloseq(duGen20, others_duG)
+duG_melt <- psmelt(duG)
+
+duG_melt <- duG_melt %>%
+  mutate(Name = case_when(
+    str_detect(Genus, "GGB", negate = TRUE) ~ Genus,
+    str_detect(Genus, "GGB", negate = FALSE) ~ paste(Genus, Family)
+  ))
+
+fig2e2 <- duG_melt %>%
+  ggplot(aes_string(x = "SampleID", y = "Abundance", fill = "Name")) +
+  geom_bar(stat = "identity", position = "stack") + 
+  facet_grid(~Stunting_status, scales = "free_x") +
+  scale_fill_manual(values = pal_duodenum) +
+  theme_bw() + 
+  theme(legend.position = "right", 
+        axis.title.x=element_blank(),
+        axis.text.x=element_text(angle = 60, hjust = 1),
+        axis.ticks.x=element_blank()) +
+  guides(fill=guide_legend(ncol=2))+
+  ylab("Relative abundance")+
+  ggtitle("Duodenal microbiota composition")+
+  labs(fill = "Genus") +
+  theme(
+    axis.text.x =  element_blank(),
+    axis.text.y = element_text(size = 11),
+    axis.title = element_text(size = 11),
+    plot.title = element_text(size = 11),
+    legend.title = element_text(size = 11),
+    legend.text = element_text(size = 11, face = 3),
+    strip.text = element_text(size = 11))
+
+fig2e2
+
+rm(duG_melt, duG, duGen20, duG_other, other_taxG_du, others_otu_du, others_duG, OtherG_du,
+   TopGen_du, topotuG_du, toptaxaG_du, ps_ra_du_gen, ps_ra_du, ps_ra_du_sp)
+```
+
+## Supplementary table S3 - Feces_RA_gen
+```{r}
+ps_ra_feces <- subset_samples(physeq_ra, Body_site =="Feces")
+ps_ra_feces <- prune_taxa(taxa_sums(ps_ra_feces)> 0, ps_ra_feces)
+ps_ra_feces_gen <- tax_glom(ps_ra_feces, "Genus") # 888 genera
+S3_Feces_RA_gen <- as.data.frame(tax_table(ps_ra_feces_gen))[,c(2,6)]
+S3_Feces_RA_gen <- S3_Feces_RA_gen %>%
+  mutate(Rel_abun = round(100*apply(otu_table(ps_ra_feces_gen), 1, mean), digits = 3),
+         Standard_dev = round(100*apply(otu_table(ps_ra_feces_gen), 1, sd), digits = 3))
+```
+
+## Supplementary table S3 - Feces_RA_sp
+```{r}
+ps_ra_feces_sp <- tax_glom(ps_ra_feces, "Species") 
+S3_Feces_RA_sp <- as.data.frame(tax_table(ps_ra_feces_sp))[,c(6,7)]
+S3_Feces_RA_sp <- S3_Feces_RA_sp %>%
+  mutate(Rel_abun = round(100*apply(otu_table(ps_ra_feces_sp), 1, mean), digits = 3),
+         Standard_dev = round(100*apply(otu_table(ps_ra_feces_sp), 1, sd), digits = 3))
+```
+
+## Figure 2F
+```{r}
+TopGen_fec <- names(sort(taxa_sums(ps_ra_feces_gen), TRUE)[1:20])
+fecGen20 <- prune_taxa(TopGen_fec, ps_ra_feces_gen)
+topotuG_fec <- otu_table(fecGen20)
+toptaxaG_fec <- tax_table(fecGen20)
+fecGen20 = phyloseq(topotuG_fec, toptaxaG_fec)
+fecGen20 = merge_phyloseq(sample_data(ps_ra_feces_gen), fecGen20)
+# Grouping other Genilies
+OtherG_fec <- names(sort(taxa_sums(ps_ra_feces_gen), TRUE)[c(21:888)])
+fecG_other <- prune_taxa(OtherG_fec, ps_ra_feces_gen)
+others_otu_fec <- t(as.matrix(apply(otu_table(fecG_other), 2, sum)))
+rownames(others_otu_fec) <- "Others Genera"
+others_otu_fec=otu_table(others_otu_fec, taxa_are_rows = TRUE)
+other_taxG_fec <- c("Others", "Others","Others","Others","Others","Others","Others", "Others")
+other_taxG_fec <- as.matrix(other_taxG_fec)
+rownames(other_taxG_fec) <- colnames(tax_table(fecG_other))
+other_taxG_fec <- t(other_taxG_fec)
+rownames(other_taxG_fec) <- "Others Genera"
+other_taxG_fec =  tax_table(other_taxG_fec)
+others_fecG= phyloseq(others_otu_fec,other_taxG_fec)
+others_fecG = merge_phyloseq(sample_data(ps_ra_feces_gen), others_fecG)
+others_fecG
+# Regrouping phyloseq
+fecG <- merge_phyloseq(fecGen20, others_fecG)
+fecG_melt <- psmelt(fecG)
+
+fecG_melt <- fecG_melt %>%
+  mutate(Name = case_when(
+    str_detect(Genus, "GGB", negate = TRUE) ~ Genus,
+    str_detect(Genus, "GGB", negate = FALSE) ~ paste(Genus, Family)
+  ))
+
+fecG_melt$Stunting_status[which(fecG_melt$Stunting_status=="Non_stunted")] <- "Non-stunted"
+
+fig2f <- fecG_melt %>%
+  ggplot(aes_string(x = "SampleID", y = "Abundance", fill = "Name")) +
+  geom_bar(stat = "identity", position = "stack") + 
+  facet_grid(~Stunting_status, scales = "free_x") +
+  scale_fill_manual(values = pal_feces) +
+  theme_bw() + 
+  theme(legend.position = "right", 
+        axis.title.x=element_blank(),
+        axis.text.x=element_text(angle = 60, hjust = 1),
+        axis.ticks.x=element_blank()) +
+  guides(fill=guide_legend(ncol=2))+
+  ylab("Relative abundance")+
+  ggtitle("Fecal microbiota composition")+
+  labs(fill = "Genus") +
+  theme(
+    axis.text.x =  element_blank(),
+    axis.text.y = element_text(size = 11),
+    axis.title = element_text(size = 11),
+    plot.title = element_text(size = 11),
+    legend.title = element_text(size = 11),
+    legend.text = element_text(size = 11, face = 3),
+    strip.text = element_text(size = 11))
+
+fig2f
+rm(fecG_melt, fecG, fecGen20, fecG_other, other_taxG_fec, others_otu_fec, others_fecG, OtherG_fec,
+   TopGen_fec, topotuG_fec, toptaxaG_fec, ps_ra_feces_gen, ps_ra_feces, ps_ra_feces_sp)
+```
+
+## Figure 2G
+```{r}
+diffabun_du <- subset_samples(physeq_abs_filtered, Body_site == "Duodenum")
+diffabun_du <- tax_glom(diffabun_du, "Species")
+diffabun_du <- subset_taxa(diffabun_du, taxa_sums(diffabun_du) > 0)
+tax_table(diffabun_du) <- tax_table(diffabun_du)[, -8]
+
+tax_df_du <- as.data.frame(tax_table(diffabun_du))
+tax_df_du <- tax_df_du %>%
+  mutate(Species = case_when(
+    !str_detect(Species, "GGB") ~ Species,
+    !str_detect(Genus, "GGB") ~ Species,
+    !str_detect(Family, "FGB") ~ paste(Family, Species),
+    !str_detect(Order, "OFGB") ~ paste(Order, Species),
+    !str_detect(Class, "CFGB") ~ paste(Class, Species),
+    str_detect(Class, "CFGB") ~ paste(Phylum, Species),
+    TRUE ~ Species
+  ))
+tax_table(diffabun_du) <- as.matrix(tax_df_du)
+
+# Trying contiuous variable: haz
+ancombc_out_du_cont <- ancombc(
+  diffabun_du,
+  formula = "haz_cont",
+  p_adj_method = "BH",
+  prv_cut = 0.1,
+  tax_level = "Species"
+)
+
+res_du = ancombc_out_du_cont$res
+df_lfc_du = data.frame(res_du$lfc[, -1] * res_du$diff_abn[, -1], check.names = FALSE) %>%
+    mutate(taxon_id = res_du$diff_abn$taxon) %>%
+    dplyr::select(taxon_id, everything())
+df_se_du = data.frame(res_du$se[, -1] * res_du$diff_abn[, -1], check.names = FALSE) %>% 
+  mutate(taxon_id = res_du$diff_abn$taxon) %>%
+    dplyr::select(taxon_id, everything())
+colnames(df_se_du)[-1] = paste0(colnames(df_se_du)[-1], "SE")
+
+# Species name
+diffabun_du_m <- psmelt(diffabun_du)
+diffabun_du_m <- diffabun_du_m %>% select(OTU, Species) %>% filter(OTU %in% res_du$diff_abn$taxon[which(res_du$diff_abn$haz_cont==TRUE)]) %>%
+  group_by(OTU, Species) %>% summarise()
+colnames(diffabun_du_m)[1] <- "taxon_id"
+df_fig_du = df_lfc_du %>% 
+  dplyr::left_join(df_se_du, by = "taxon_id") %>%
+  dplyr::transmute(taxon_id, haz_cont, haz_contSE) %>%
+  dplyr::filter(haz_cont != 0) %>% 
+  dplyr::arrange(desc(haz_cont)) %>%
+  dplyr::mutate(direct = ifelse(haz_cont > 0, "Positive LFC", "Negative LFC"))
+df_fig_du <- inner_join(df_fig_du, diffabun_du_m, by="taxon_id")
+
+df_fig_du$Species = factor(df_fig_du$Species, levels = df_fig_du$Species)
+df_fig_du$direct = factor(df_fig_du$direct, 
+                        levels = c("Positive LFC", "Negative LFC"))
+
+fig2g <- ggplot(data = df_fig_du, 
+           aes(x = Species, y = haz_cont, fill = direct, color = direct)) + 
+  geom_bar(stat = "identity", width = 0.7, 
+           position = position_dodge(width = 0.4)) +
+  geom_errorbar(aes(ymin = haz_cont - haz_contSE, ymax = haz_cont + haz_contSE), width = 0.2,
+                position = position_dodge(0.05), color = "black") + 
+  labs(x = NULL, y = "Log fold change") + 
+  scale_fill_manual(values = c("#93c47d","#e06666"), name=NULL) +
+  scale_color_manual(values = c("#93c47d","#e06666"), name=NULL) +
+  theme_bw() + 
+  theme(plot.title = element_text(hjust = 0.5),
+        panel.grid.minor.y = element_blank(),
+        axis.text.x = element_text(angle = 60, hjust = 1),
+        legend.position = "bottom") +
+  coord_flip()
+
+fig2g
+
+rm(diffabun_du, tax_df_du, ancombc_out_du_cont, df_lfc_du, df_se_du, df_fig_du, diffabun_du_m)
+```
+
+## Supplementary table S3 - ANCOMBC_HAZ
+```{r}
+S3_ANCOMBC_HAZ <- cbind(res_du$lfc, res_du$se, res_du$p_val, res_du$q_val)
+S3_ANCOMBC_HAZ <- S3_ANCOMBC_HAZ[,c(1,3,6,9,12)]
+colnames(S3_ANCOMBC_HAZ)[2] <- "lfc"
+colnames(S3_ANCOMBC_HAZ)[3] <- "se"
+colnames(S3_ANCOMBC_HAZ)[4] <- "pval"
+colnames(S3_ANCOMBC_HAZ)[5] <- "qval"
+
+rm(res_du)
+```
+
+## Figure 2H
+```{r}
+diffabun_fe_abs <- subset_samples(physeq_abs_filtered, Body_site == "Feces")
+diffabun_fe_abs <- tax_glom(diffabun_fe_abs, "Species")
+diffabun_fe_abs <- subset_taxa(diffabun_fe_abs, taxa_sums(diffabun_fe_abs) > 0)
+tax_table(diffabun_fe_abs) <- tax_table(diffabun_fe_abs)[, -8]
+
+tax_df_fe_abs <- as.data.frame(tax_table(diffabun_fe_abs))
+tax_df_fe_abs <- tax_df_fe_abs %>%
+  mutate(Species = case_when(
+    !str_detect(Species, "GGB") ~ Species,
+    !str_detect(Genus, "GGB") ~ Species,
+    !str_detect(Family, "FGB") ~ paste(Family, Species),
+    !str_detect(Order, "OFGB") ~ paste(Order, Species),
+    !str_detect(Class, "CFGB") ~ paste(Class, Species),
+    str_detect(Class, "CFGB") ~ paste(Phylum, Species),
+    TRUE ~ Species
+  ))
+tax_table(diffabun_fe_abs) <- as.matrix(tax_df_fe_abs)
+
+ancombc_out_fe <- run_ancombc(diffabun_fe_abs, group = "Stunting_status", taxa_rank = "Species",
+                              p_adjust = "BH")
+
+fig2h <- plot_ef_bar(ancombc_out_fe) +
+  theme(legend.position = "bottom") +
+  scale_fill_manual(values = c("#93c47d","#e06666"))
+
+fig2h
+
+rm(diffabun_fe_abs, tax_df_fe_abs, ancombc_out_fe)
+```
+
+## Supplementary table S3 - ANCOMBC_HAZ_bis
+```{r}
+ancombc_out_fe_cont <- ancombc(
+  diffabun_fe_abs,
+  formula = "haz_cont",
+  p_adj_method = "BH",
+  prv_cut = 0.1,
+  tax_level = "Species"
+)
+res_fe = ancombc_out_fe_cont$res
+S3_ANCOMBC_HAZ_bis <- cbind(res_fe$lfc, res_fe$se, res_fe$p_val, res_fe$q_val)
+S3_ANCOMBC_HAZ_bis <- S3_ANCOMBC_HAZ_bis[,c(1,3,6,9,12)]
+colnames(S3_ANCOMBC_HAZ_bis)[2] <- "lfc"
+colnames(S3_ANCOMBC_HAZ_bis)[3] <- "se"
+colnames(S3_ANCOMBC_HAZ_bis)[4] <- "pval"
+colnames(S3_ANCOMBC_HAZ_bis)[5] <- "qval"
+
+```
+
+## Figure 2I
+```{r}
+diffabun_fe <- subset_samples(physeq_ra, Body_site == "Feces")
+diffabun_fe <- tax_glom(diffabun_fe, "Species")
+diffabun_fe <- subset_taxa(diffabun_fe, taxa_sums(diffabun_fe) > 0)
+tax_table(diffabun_fe) <- tax_table(diffabun_fe)[, -8]
+
+tax_df_fe <- as.data.frame(tax_table(diffabun_fe))
+tax_df_fe <- tax_df_fe %>%
+  mutate(Species = case_when(
+    !str_detect(Species, "GGB") ~ Species,
+    !str_detect(Genus, "GGB") ~ Species,
+    !str_detect(Family, "FGB") ~ paste(Family, Species),
+    !str_detect(Order, "OFGB") ~ paste(Order, Species),
+    !str_detect(Class, "CFGB") ~ paste(Class, Species),
+    str_detect(Class, "CFGB") ~ paste(Phylum, Species),
+    TRUE ~ Species
+  ))
+tax_table(diffabun_fe) <- as.matrix(tax_df_fe)
+
+lef_out_fe <- run_lefse(diffabun_fe, wilcoxon_cutoff = 0.01, group = "Stunting_status", taxa_rank = "Species",
+                        kw_cutoff = 0.05, norm = "CPM", multigrp_strat = TRUE, lda_cutoff = 2)
+
+
+fig2i <- plot_ef_bar(lef_out_fe) +
+  theme(legend.position = "bottom") +
+  scale_fill_manual(values = c("#93c47d","#e06666"))
+
+fig2i
+
+rm(diffabun_fe, tax_df_fe, lef_out_fe)
+```
+
+
+
+
