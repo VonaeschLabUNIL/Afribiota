@@ -1,0 +1,608 @@
+---
+title: "Satellite Figure 3"
+author: "Simon Yersin"
+date: "2025-11-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load library
+```{r, warning=FALSE, message=FALSE}
+library(readxl)
+library(phyloseq)
+library(stringr)
+library(dplyr)
+library(MicEco)
+library(circlize)
+library(ComplexHeatmap)
+
+
+library(tidyr)
+library(rstatix)
+library(ggplot2)
+library(usedist)
+library(vegan)
+library(ANCOMBC)
+library(microbiomeMarker)
+
+
+library(readr)
+library(circlize)
+
+library(SIAMCAT)
+library(purrr)
+library(DESeq2)
+library(glue)
+library(broom)
+```
+
+# Load metadata tables
+```{r}
+md <- as.data.frame(read_xlsx("../Supplementary_files/SupplementaryTableS1.xlsx"))
+rownames(md) <- md$SampleID
+md_ps <- sample_data(md)
+```
+
+# Load MetaPhlAn profiles and create phyloseq
+Relative abundance
+```{r}
+tax_table <- as.data.frame(read_xlsx("../Supplementary_files/SupplementaryTableS3.xlsx", sheet = 2, skip = 1))
+
+## Create a taxonomy table
+# Obtain a table with only the tax names
+tax_names <- as.data.frame(str_split_fixed(tax_table$clade_name, "\\|[p,c,o,f,g,s,t]__", 8))
+tax_names[,1] <- str_remove(tax_names[,1], "k__")
+# Keeping only the rows with the complete taxonomy
+tax_names <- tax_names[-(which(tax_names[,8] == "")),] 
+# Changing colnames
+colnames(tax_names) <- c("Kingdom", "Phylum", "Class","Order","Family","Genus","Species", "SGB")
+# Adding the rownames
+tax_names <- tax_names %>%
+  mutate(SGB = paste("SGB", seq(1:nrow(tax_names)), sep=""))
+rownames(tax_names) <- tax_names$SGB
+asv_num <- tax_names$SGB
+tax_names <- tax_names[,-9]
+tax_names <- as.matrix(tax_names)
+# We have now a taxonomy table, similar than the one obtain with DADA2
+# Set as tax tablt phyloseq object
+taxonomy_table <- tax_table(tax_names)
+
+## Abundance table
+abun_table <- cbind(str_split_fixed(tax_table$clade_name, "\\|[p,c,o,f,g,s,t]__", 8),tax_table)
+abun_table <- as.data.frame(abun_table)
+abun_table[,1] <- str_remove(abun_table[,1], "k__")
+abun_table <- abun_table[-(which(abun_table[,8] == "")),] 
+rownames(abun_table) <- asv_num
+abun_table <- abun_table[,-c(1:9)]
+# We have now a table with the column being each sample
+# The row are the SGB assigned to a bacteria in the taxonomy table
+# Clear the column name
+colnames(abun_table) <- str_remove(colnames(abun_table), "_metaphlan")
+# Set as otu_table phyloseq object
+abun_table <- as.matrix(abun_table)
+class(abun_table) <- "numeric"
+abundance_table = otu_table(abun_table, taxa_are_rows = TRUE)
+
+# We have now a tax table and an otu table, we can create our phyloseq
+physeq <- phyloseq(taxonomy_table, abundance_table)
+
+physeq <- merge_phyloseq(physeq, md_ps)
+# 128 samples
+# 1998 taxa
+physeq_filtered <- physeq %>%
+  subset_taxa(Kingdom != "Eukaryota")
+# Removing taxa with abundance 0
+physeq_filtered <- prune_taxa(taxa_sums(physeq_filtered) > 0, physeq_filtered)
+physeq_ra <- transform_sample_counts(physeq_filtered, function(x) x / sum(x))
+# Removed 8 taxa by filtering
+
+# Cleaning environment
+rm(tax_names, abun_table, tax_table, physeq, abundance_table, taxonomy_table, asv_num)
+```
+
+## Supplementary table S3 - sheet Cat_SaFE
+```{r}
+physeq_cat <- tax_glom(physeq_ra, taxrank = "Species")
+physeq_cat <- prune_taxa(taxa_sums(physeq_cat)> 0, physeq_cat)
+# 1906 species in the dataset, 128 samples
+
+# Remove samples without paired saliva - stool samples
+physeq_sp_sf <- subset_samples(physeq_cat, PatientID != "1429AGN007" & PatientID != "1429AGN012" &
+                                 PatientID != "1429AGN014" & PatientID != "1429AGN029" & PatientID != "1429AGN040")
+#Keep only saliva and stool samples --> 78 samples = 39 individuals
+physeq_sp_sf <- subset_samples(physeq_sp_sf, Body_site == "Saliva" | Body_site == "Feces")
+
+# Per taxa total abundance filtering at 10^-4
+physeq_sp_sf <- subset_taxa(physeq_sp_sf, taxa_sums(physeq_sp_sf)/78 > 10^-4)
+# Prevalence filtering
+prevdf_sp_sf = apply(X= otu_table(physeq_sp_sf),
+               MARGIN = ifelse(taxa_are_rows(physeq_sp_sf),
+              yes =1, no =2), FUN = function(x){sum(x>0)})
+prevdf_sp_sf = data.frame(Prevalence = prevdf_sp_sf,
+                        Percentage_Prev_feces = 100*prevdf_sp_sf/78,
+                        tax_table(physeq_sp_sf))
+# Filter for taxa in at least 10% of the samples (saliva + stool samples)
+physeq_sp_sf = subset_taxa(physeq_sp_sf,  rownames(tax_table(physeq_sp_sf)) %in% rownames(prevdf_sp_sf)[which(prevdf_sp_sf$Percentage_Prev >= 10)])
+# 547 taxa have prevalence > 10% in fecal and saliva sample AND average relative abundance > 10^-4
+# For now, only prevalence and abundance filter and only saliva and feces
+# Compute prevalence and abundance per compartment
+# Prevalence and abundance in feces for all species
+physeq_sp_fe <- subset_samples(physeq_sp_sf, Body_site == "Feces")
+prevdf_sp_fe = apply(X= otu_table(physeq_sp_fe),
+               MARGIN = ifelse(taxa_are_rows(physeq_sp_fe),
+              yes =1, no =2), FUN = function(x){sum(x>0)})
+prevdf_sp_fe = data.frame(Prevalence_feces = prevdf_sp_fe,
+                       Percentage_Prev_feces = 100*prevdf_sp_fe/39,
+                       Mean_Abundance_feces = 100*taxa_sums(physeq_sp_fe)/39,
+                       Total_Abundance_feces = taxa_sums(physeq_sp_fe),
+                        tax_table(physeq_sp_fe))
+prevdf_sp_fe <- prevdf_sp_fe[, -12]
+# Prevalence and abundance in saliva for all species
+physeq_sp_sa <- subset_samples(physeq_sp_sf, Body_site == "Saliva")
+prevdf_sp_sa = apply(X= otu_table(physeq_sp_sa),
+               MARGIN = ifelse(taxa_are_rows(physeq_sp_sa),
+              yes =1, no =2), FUN = function(x){sum(x>0)})
+prevdf_sp_sa = data.frame(Prevalence_saliva = prevdf_sp_sa,
+                       Percentage_Prev_saliva = 100*prevdf_sp_sa/39,
+                       Mean_Abundance_saliva = 100*taxa_sums(physeq_sp_sa)/39,
+                       Total_Abundance_saliva = taxa_sums(physeq_sp_sa),
+                        tax_table(physeq_sp_sa))
+prevdf_sp_sa <- prevdf_sp_sa[, -12]
+# Remerging dataframe saliva + stool
+prevdf_sp <- cbind(prevdf_sp_sa[,c(1:4)], prevdf_sp_fe)
+# Adding categories:
+prevdf_sp <- prevdf_sp %>%
+  mutate(Intersect_category = "")
+# Unique to a compartment: 0 prevalence in the other
+prevdf_sp$Intersect_category[which(prevdf_sp$Percentage_Prev_saliva > 0 
+                                    & prevdf_sp$Percentage_Prev_feces == 0)] <- "Uniquely oral"
+prevdf_sp$Intersect_category[which(prevdf_sp$Percentage_Prev_saliva == 0 
+                                    & prevdf_sp$Percentage_Prev_feces > 0)] <- "Uniquely fecal"
+# Low prevalence taxa: <10 in both compartment 
+prevdf_sp$Intersect_category[which(prevdf_sp$Percentage_Prev_saliva < 10 & prevdf_sp$Percentage_Prev_feces < 10)] <- "Low prevalence"
+# Completely shared taxa: 100% prevalence in both compartment
+prevdf_sp$Intersect_category[which(prevdf_sp$Percentage_Prev_saliva == 100 & prevdf_sp$Percentage_Prev_feces == 100)] <- "Completely shared"
+# Compartmental origin: >10 in one and <10 in the other
+prevdf_sp$Intersect_category[which(prevdf_sp$Percentage_Prev_saliva > 10 
+                                    & prevdf_sp$Percentage_Prev_feces < 10 & prevdf_sp$Percentage_Prev_feces > 0)] <- "Oral origin"
+prevdf_sp$Intersect_category[which(prevdf_sp$Percentage_Prev_saliva < 10 & prevdf_sp$Percentage_Prev_saliva > 0 
+                                    & prevdf_sp$Percentage_Prev_feces > 10)] <- "Fecal origin"
+# Often shared: found in both compartment with >10 and <60
+prevdf_sp$Intersect_category[which(prevdf_sp$Percentage_Prev_saliva >= 10 & prevdf_sp$Percentage_Prev_saliva < 100
+                                    & prevdf_sp$Percentage_Prev_feces >= 10 )] <- "Mostly shared"
+prevdf_sp$Intersect_category[which(prevdf_sp$Percentage_Prev_saliva >= 10
+                                    & prevdf_sp$Percentage_Prev_feces >= 10 & prevdf_sp$Percentage_Prev_feces < 100)] <- "Mostly shared"
+# Highly shared: >60 and < 100
+prevdf_sp$Intersect_category[which(prevdf_sp$Percentage_Prev_saliva >= 60 & prevdf_sp$Percentage_Prev_saliva < 100
+                                    & prevdf_sp$Percentage_Prev_feces >= 60)] <- "Highly shared"
+prevdf_sp$Intersect_category[which(prevdf_sp$Percentage_Prev_saliva >= 60 
+                                    & prevdf_sp$Percentage_Prev_feces >= 60 & prevdf_sp$Percentage_Prev_feces < 100)] <- "Highly shared"
+# Change category as factor
+prevdf_sp$Intersect_category <- as.factor(prevdf_sp$Intersect_category)
+# Create levels and order them
+prevdf_sp$Intersect_category <- factor(prevdf_sp$Intersect_category, levels=c("Uniquely oral", "Oral origin", "Low prevalence",
+                                                                                "Mostly shared", "Highly shared", "Completely shared",
+                                                                                "Fecal origin", "Uniquely fecal"), ordered = TRUE)
+prevdf_sp_ordered <- prevdf_sp[order(prevdf_sp$Intersect_category, prevdf_sp$Percentage_Prev_saliva, prevdf_sp$Percentage_Prev_feces),]
+
+# Rename unasigned species (SGB) with the higher taxnomic rank
+prevdf_sp_ordered <- prevdf_sp_ordered %>%
+  mutate(Name = case_when(
+    str_detect(Species, "GGB", negate = TRUE) ~ Species,
+    str_detect(Genus, "GGB", negate = TRUE) ~ Species,
+    str_detect(Family, "FGB", negate = TRUE) ~ paste(Family,Species),
+    str_detect(Order, "OFGB", negate = TRUE) ~ paste(Order, Species),
+    str_detect(Class, "CFGB", negate = TRUE) ~ paste(Class, Species),
+    str_detect(Class, "CFGB") ~ paste(Phylum, Species)
+  ))
+
+S3_Cat_SaFe <- prevdf_sp_ordered
+
+# Count table per intersect category
+df_shared_sf <- prevdf_sp_ordered %>%
+  group_by(Intersect_category) %>%
+  summarise(n_species = n_distinct(Name),
+            sum_meanAbundance_sa = sum(Mean_Abundance_saliva),
+            sum_meanAbundance_fe = sum(Mean_Abundance_feces))
+
+S3_Cat_SaFe_bis <- df_shared_sf
+
+rm(prevdf_sp_sf, prevdf_sp_sa, physeq_sp_fe, physeq_sp_sa, prevdf_sp, prevdf_sp_fe, df_shared_sf)
+```
+## Figure 3A
+```{r}
+prevdf_sp_hm <- prevdf_sp_ordered
+rownames(prevdf_sp_hm) <- prevdf_sp_hm$Name
+
+# Set color range
+col_fun = colorRamp2(c(0,100), c("white","#8f3b3b"))
+
+# Matrix for heatmap
+hm_tab_prev <- t(prevdf_sp_hm[,c(2, 6)])
+rownames(hm_tab_prev)[1] <- "Saliva"
+rownames(hm_tab_prev)[2] <- "Feces"
+
+# Set row annotations
+row_annot_prev <- rowAnnotation(ls = prevdf_sp_hm$Intersect_category,
+                                  col = list(ls=c("Uniquely oral" = "#9AB9C2",
+                                                  "Oral origin" = "#c2d5da",
+                                                  "Mostly shared" = "#e6aaaa",
+                                                  "Highly shared" = "#cd5555",
+                                                  "Completely shared" = "#8f3b3b",
+                                                  "Fecal origin" = "#ead993",
+                                                  "Uniquely fecal" = "#DCC04B")),
+                                  annotation_label = " ", annotation_name_side = "top", annotation_name_rot = 90)
+
+# Heatmap
+fig3a <- Heatmap(t(hm_tab_prev), name = "Prevalence",
+                             row_order =  rownames(prevdf_sp_hm), column_order = c("Saliva", "Feces"),
+        col = col_fun, left_annotation = row_annot_prev, show_column_dend = FALSE, show_row_names =  FALSE, column_names_side = "top",
+        column_names_rot = 90, border = FALSE, row_title = NULL)    
+
+
+fig3a
+
+rm(prevdf_sp_hm, col_fun, hm_tab_prev, row_annot_prev, prevdf_sp_ordered)
+```
+
+## Figure 3B
+```{r}
+# Venn diagram 
+# Order body sites
+sample_data(physeq_sp_sf)$Body_site <- factor(
+  sample_data(physeq_sp_sf)$Body_site,
+  levels = c("Saliva", "Feces")  # Replace with the actual levels present
+)
+fig3b <- MicEco::ps_venn(physeq_sp_sf,
+        group = "Body_site",
+        plot = TRUE, 
+        fill = c("#9AB9C2","#DCC04B", "white"),
+        label=list(cex=2),
+        quantities = list(cex=4)
+        )
+fig3b
+
+rm(physeq_sp_sf)
+```
+
+## Supplementary table S3 - sheet Cat_GaDu
+```{r}
+physeq_sp_gd <- subset_samples(physeq_cat, Body_site == "Duodenum" | Body_site == "Gastric")
+# Remove samples with unpaired saliva and feces
+physeq_sp_gd <- subset_samples(physeq_sp_gd, PatientID %in% intersect(md$PatientID[which(md$Body_site =="Gastric")],
+          md$PatientID[which(md$Body_site =="Duodenum")]))
+
+physeq_sp_gd <- subset_taxa(physeq_sp_gd, taxa_sums(physeq_sp_gd)/22 > 10^-4)
+
+prevdf_sp_gd = apply(X= otu_table(physeq_sp_gd),
+               MARGIN = ifelse(taxa_are_rows(physeq_sp_gd),
+              yes =1, no =2), FUN = function(x){sum(x>0)})
+prevdf_sp_gd = data.frame(Prevalence = prevdf_sp_gd,
+                        Percentage_Prev = 100*prevdf_sp_gd/22,
+                        tax_table(physeq_sp_gd))
+
+physeq_sp_gd = subset_taxa(physeq_sp_gd,  rownames(tax_table(physeq_sp_gd)) %in% rownames(prevdf_sp_gd)[which(prevdf_sp_gd$Percentage_Prev >= 10)])
+# 253 taxa
+
+# Prevalence and abundance in gastric for all species
+physeq_sp_gd_ga <- subset_samples(physeq_sp_gd, Body_site == "Gastric")
+prevdf_sp_gd_ga = apply(X= otu_table(physeq_sp_gd_ga),
+               MARGIN = ifelse(taxa_are_rows(physeq_sp_gd_ga),
+              yes =1, no =2), FUN = function(x){sum(x>0)})
+prevdf_sp_gd_ga = data.frame(Prevalence_ga = prevdf_sp_gd_ga,
+                       Percentage_Prev_ga = 100*prevdf_sp_gd_ga/11,
+                       Mean_Abundance_ga = 100*taxa_sums(physeq_sp_gd_ga)/11,
+                       Total_Abundance_ga = taxa_sums(physeq_sp_gd_ga),
+                        tax_table(physeq_sp_gd_ga))
+prevdf_sp_gd_ga <- prevdf_sp_gd_ga[, -12]
+
+
+# Prevalence and abundance in duodenal for all species
+physeq_sp_gd_da <- subset_samples(physeq_sp_gd, Body_site == "Duodenum")
+prevdf_sp_gd_da = apply(X= otu_table(physeq_sp_gd_da),
+               MARGIN = ifelse(taxa_are_rows(physeq_sp_gd_da),
+              yes =1, no =2), FUN = function(x){sum(x>0)})
+prevdf_sp_gd_da = data.frame(Prevalence_da = prevdf_sp_gd_da,
+                       Percentage_Prev_da = 100*prevdf_sp_gd_da/11,
+                       Mean_Abundance_da = 100*taxa_sums(physeq_sp_gd_da)/11,
+                       Total_Abundance_da = taxa_sums(physeq_sp_gd_da),
+                        tax_table(physeq_sp_gd_da))
+prevdf_sp_gd_da <- prevdf_sp_gd_da[, -12]
+
+
+# Merging dataset
+prevdf_sp_gd <- cbind(prevdf_sp_gd_ga[,c(1:4)], prevdf_sp_gd_da)
+
+# Adding categories:
+prevdf_sp_gd <- prevdf_sp_gd %>%
+  mutate(Intersect_category = "")
+prevdf_sp_gd$Intersect_category[which(prevdf_sp_gd$Percentage_Prev_ga > 10 
+                                    & prevdf_sp_gd$Percentage_Prev_da < 10)] <- "Gastric origin"
+
+prevdf_sp_gd$Intersect_category[which(prevdf_sp_gd$Percentage_Prev_ga < 10
+                                    & prevdf_sp_gd$Percentage_Prev_da > 10)] <- "Duodenal origin"
+#Unique to a body site
+prevdf_sp_gd$Intersect_category[which(prevdf_sp_gd$Percentage_Prev_ga > 0 
+                                    & prevdf_sp_gd$Percentage_Prev_da == 0)] <- "Uniquely gastric"
+
+prevdf_sp_gd$Intersect_category[which(prevdf_sp_gd$Percentage_Prev_ga == 0 
+                                    & prevdf_sp_gd$Percentage_Prev_da > 0)] <- "Uniquely duodenal"
+
+prevdf_sp_gd$Intersect_category[which(prevdf_sp_gd$Percentage_Prev_ga < 10 
+                                   & prevdf_sp_gd$Percentage_Prev_da < 10)] <- "Low prevalence"
+
+# Shared
+prevdf_sp_gd$Intersect_category[which(prevdf_sp_gd$Percentage_Prev_ga >= 10
+                                    & prevdf_sp_gd$Percentage_Prev_da >= 10)] <- "Mostly shared"
+
+prevdf_sp_gd$Intersect_category[which(prevdf_sp_gd$Percentage_Prev_ga >= 60
+                                    & prevdf_sp_gd$Percentage_Prev_da >= 60)] <- "Highly shared"
+
+prevdf_sp_gd$Intersect_category[which(prevdf_sp_gd$Percentage_Prev_ga == 100 & 
+                                         prevdf_sp_gd$Percentage_Prev_da == 100)] <- "Completely shared"
+
+prevdf_sp_gd$Intersect_category <- as.factor(prevdf_sp_gd$Intersect_category)
+prevdf_sp_gd$Intersect_category <- factor(prevdf_sp_gd$Intersect_category, levels=c("Uniquely gastric", "Gastric origin",
+                                                                                "Mostly shared", "Highly shared", "Completely shared",
+                                                                                "Duodenal origin", "Uniquely duodenal"), ordered = TRUE)
+
+
+prevdf_sp_gd_ordered <- prevdf_sp_gd[order(prevdf_sp_gd$Intersect_category, -prevdf_sp_gd$Percentage_Prev_ga,
+                                             prevdf_sp_gd$Percentage_Prev_ga),]
+
+# Rename unasigned species (SGB)
+prevdf_sp_gd_ordered <- prevdf_sp_gd_ordered %>%
+  mutate(Name = case_when(
+    str_detect(Species, "GGB", negate = TRUE) ~ Species,
+    str_detect(Genus, "GGB", negate = TRUE) ~ Species,
+    str_detect(Family, "FGB", negate = TRUE) ~ paste(Family,Species),
+    str_detect(Order, "OFGB", negate = TRUE) ~ paste(Order, Species),
+    str_detect(Class, "CFGB", negate = TRUE) ~ paste(Class, Species),
+    str_detect(Class, "CFGB") ~ paste(Phylum, Species)
+  ))
+
+S3_Cat_GuDu <- prevdf_sp_gd_ordered
+
+# Count table per intersect category
+df_shared_gd <- prevdf_sp_gd_ordered %>%
+  group_by(Intersect_category) %>%
+  summarise(n_species = n_distinct(Name),
+            sum_meanAbundance_ga = sum(Mean_Abundance_ga),
+            sum_meanAbundance_du = sum(Mean_Abundance_da))
+
+S3_Cat_GuDu_bis <- df_shared_gd
+
+rm(prevdf_sp_gd, prevdf_sp_gd_da, prevdf_sp_gd_ga, physeq_sp_gd_da, physeq_sp_gd_ga, df_shared_gd, prevdf_sp_gd_ordered)
+```
+
+## Figure 3C
+```{r}
+sample_data(physeq_sp_gd)$Body_site <- factor(
+  sample_data(physeq_sp_gd)$Body_site,
+  levels = c("Gastric", "Duodenum")  # Replace with the actual levels present
+)
+
+fig3c <- MicEco::ps_venn(physeq_sp_gd,
+        group = "Body_site",
+        plot = TRUE, 
+        fill = c("#BBDEEC", "#EDE692","white"),
+        label=list(cex=2),
+        quantities = list(cex=4)
+        )
+fig3c
+
+rm(physeq_sp_gd)
+```
+
+## Supplementary table S3 - sheet Cat_SaUGitFe
+```{r}
+# Keep children with saliva - gastric - stool samples: 27 children
+# It automatically keeps the 11 duodenal samples - all children with a duodenal samples have a gastric sample
+physeq_sp_sgf <- subset_samples(physeq_cat, PatientID %in% intersect(intersect(md$PatientID[which(md$Body_site =="Gastric")],
+          md$PatientID[which(md$Body_site =="Saliva")]),
+          md$PatientID[which(md$Body_site =="Feces")]))
+
+# Abundance filtering
+physeq_sp_sgf <- subset_taxa(physeq_sp_sgf, taxa_sums(physeq_sp_sgf)/92 > 10^-4)
+# 589 taxa (6 less than if you remove duodenal)
+# Prevalence filtering
+prevdf_sp_sgf = apply(X= otu_table(physeq_sp_sgf),
+               MARGIN = ifelse(taxa_are_rows(physeq_sp_sgf),
+              yes =1, no =2), FUN = function(x){sum(x>0)})
+prevdf_sp_sgf = data.frame(Prevalence = prevdf_sp_sgf,
+                        Percentage_Prev = 100*prevdf_sp_sgf/92,
+                        tax_table(physeq_sp_sgf))
+physeq_sp_sgf = subset_taxa(physeq_sp_sgf,
+                            rownames(tax_table(physeq_sp_sgf)) %in% rownames(prevdf_sp_sgf)[which(prevdf_sp_sgf$Percentage_Prev >= 10)])
+# 455 taxa have prevalence > 10% AND average relative abundance > 10^-4
+
+# Rename Gastric and Duodenum as Upper GIT
+sample_data(physeq_sp_sgf)$Body_site[which(sample_data(physeq_sp_sgf)$Body_site=="Gastric" |
+                                             sample_data(physeq_sp_sgf)$Body_site=="Duodenum")] <- "Upper GIT"
+# 38 samples in Upper GIT
+
+# Prevalence and abundance in feces for all species
+physeq_sp_sgf_fe <- subset_samples(physeq_sp_sgf, Body_site == "Feces")
+prevdf_sp_sgf_fe = apply(X= otu_table(physeq_sp_sgf_fe),
+               MARGIN = ifelse(taxa_are_rows(physeq_sp_sgf_fe),
+              yes =1, no =2), FUN = function(x){sum(x>0)})
+prevdf_sp_sgf_fe = data.frame(Prevalence_feces = prevdf_sp_sgf_fe,
+                       Percentage_Prev_feces = 100*prevdf_sp_sgf_fe/27,
+                       Mean_Abundance_feces = 100*taxa_sums(physeq_sp_sgf_fe)/27,
+                       Total_Abundance_feces = taxa_sums(physeq_sp_sgf_fe),
+                        tax_table(physeq_sp_sgf_fe))
+prevdf_sp_sgf_fe <- prevdf_sp_sgf_fe[, -12]
+
+# Prevalence and abundance in saliva for all species
+physeq_sp_sgf_sa <- subset_samples(physeq_sp_sgf, Body_site == "Saliva")
+prevdf_sp_sgf_sa = apply(X= otu_table(physeq_sp_sgf_sa),
+               MARGIN = ifelse(taxa_are_rows(physeq_sp_sgf_sa),
+              yes =1, no =2), FUN = function(x){sum(x>0)})
+prevdf_sp_sgf_sa = data.frame(Prevalence_saliva = prevdf_sp_sgf_sa,
+                       Percentage_Prev_saliva = 100*prevdf_sp_sgf_sa/27,
+                       Mean_Abundance_saliva = 100*taxa_sums(physeq_sp_sgf_sa)/27,
+                       Total_Abundance_saliva = taxa_sums(physeq_sp_sgf_sa),
+                        tax_table(physeq_sp_sgf_sa))
+prevdf_sp_sgf_sa <- prevdf_sp_sgf_sa[, -12]
+
+# Prevalence and abundance in upper GIT for all species
+physeq_sp_sgf_ga <- subset_samples(physeq_sp_sgf, Body_site == "Upper GIT")
+prevdf_sp_sgf_ga = apply(X= otu_table(physeq_sp_sgf_ga),
+               MARGIN = ifelse(taxa_are_rows(physeq_sp_sgf_ga),
+              yes =1, no =2), FUN = function(x){sum(x>0)})
+prevdf_sp_sgf_ga = data.frame(Prevalence_ga = prevdf_sp_sgf_ga,
+                       Percentage_Prev_ga = 100*prevdf_sp_sgf_ga/38,
+                       Mean_Abundance_ga = 100*taxa_sums(physeq_sp_sgf_ga)/38,
+                       Total_Abundance_ga = taxa_sums(physeq_sp_sgf_ga),
+                        tax_table(physeq_sp_sgf_ga))
+prevdf_sp_sgf_ga <- prevdf_sp_sgf_ga[, -12]
+
+# Merging dataset
+prevdf_sp_sgf <- cbind(prevdf_sp_sgf_sa[,c(1:4)], prevdf_sp_sgf_fe[,c(1:4)], prevdf_sp_sgf_ga)
+
+# Adding categories:
+prevdf_sp_sgf <- prevdf_sp_sgf %>%
+  mutate(Intersect_category = "")
+prevdf_sp_sgf$Intersect_category[which(prevdf_sp_sgf$Percentage_Prev_saliva > 10 
+                                    & prevdf_sp_sgf$Percentage_Prev_feces < 10
+                                    & prevdf_sp_sgf$Percentage_Prev_ga < 10)] <- "Oral origin"
+
+prevdf_sp_sgf$Intersect_category[which(prevdf_sp_sgf$Percentage_Prev_saliva < 10
+                                    & prevdf_sp_sgf$Percentage_Prev_feces > 10 
+                                    & prevdf_sp_sgf$Percentage_Prev_ga < 10)] <- "Fecal origin"
+
+prevdf_sp_sgf$Intersect_category[which(prevdf_sp_sgf$Percentage_Prev_saliva < 10
+                                    & prevdf_sp_sgf$Percentage_Prev_ga > 10 
+                                    & prevdf_sp_sgf$Percentage_Prev_feces < 10 )] <- "Upper GIT origin"
+#Unique to a body site
+prevdf_sp_sgf$Intersect_category[which(prevdf_sp_sgf$Percentage_Prev_saliva > 0 
+                                    & prevdf_sp_sgf$Percentage_Prev_feces == 0
+                                     & prevdf_sp_sgf$Percentage_Prev_ga == 0)] <- "Uniquely oral"
+prevdf_sp_sgf$Intersect_category[which(prevdf_sp_sgf$Percentage_Prev_saliva == 0 
+                                    & prevdf_sp_sgf$Percentage_Prev_feces > 0
+                                     & prevdf_sp_sgf$Percentage_Prev_ga == 0)] <- "Uniquely fecal"
+prevdf_sp_sgf$Intersect_category[which(prevdf_sp_sgf$Percentage_Prev_ga > 0 
+                                    & prevdf_sp_sgf$Percentage_Prev_feces == 0
+                                     & prevdf_sp_sgf$Percentage_Prev_saliva == 0)] <- "Uniquely upper GIT"
+
+
+prevdf_sp_sgf$Intersect_category[which(prevdf_sp_sgf$Percentage_Prev_saliva < 10 
+                                   & prevdf_sp_sgf$Percentage_Prev_feces < 10 &
+                                     prevdf_sp_sgf$Percentage_Prev_ga < 10)] <- "Low prevalence"
+
+# Shared by pairs
+prevdf_sp_sgf$Intersect_category[which(prevdf_sp_sgf$Percentage_Prev_saliva > 10 
+                                    & prevdf_sp_sgf$Percentage_Prev_feces < 10
+                                    & prevdf_sp_sgf$Percentage_Prev_ga > 10)] <- "Shared in upper digestive tract"
+prevdf_sp_sgf$Intersect_category[which(prevdf_sp_sgf$Percentage_Prev_saliva < 10
+                                    & prevdf_sp_sgf$Percentage_Prev_feces > 10 
+                                    & prevdf_sp_sgf$Percentage_Prev_ga > 10)] <- "Shared in lower digestive tract"
+prevdf_sp_sgf$Intersect_category[which(prevdf_sp_sgf$Percentage_Prev_saliva > 10
+                                    & prevdf_sp_sgf$Percentage_Prev_feces > 10 
+                                    & prevdf_sp_sgf$Percentage_Prev_ga < 10)] <- "Saliva-feces"
+
+prevdf_sp_sgf$Intersect_category[which(prevdf_sp_sgf$Percentage_Prev_saliva >= 10
+                                    & prevdf_sp_sgf$Percentage_Prev_feces >= 10 
+                                    & prevdf_sp_sgf$Percentage_Prev_ga >= 10 )] <- "Mostly shared"
+
+
+prevdf_sp_sgf$Intersect_category[which(prevdf_sp_sgf$Percentage_Prev_saliva >= 60
+                                    & prevdf_sp_sgf$Percentage_Prev_feces >= 60
+                                    & prevdf_sp_sgf$Percentage_Prev_ga >= 60)] <- "Highly shared"
+
+# No taxa are present in all samples! 1 gastric sample does not have Streptococcus salivarius
+prevdf_sp_sgf$Intersect_category[which(prevdf_sp_sgf$Percentage_Prev_saliva == 100 & 
+                                         prevdf_sp_sgf$Percentage_Prev_feces == 100 &
+                                         prevdf_sp_sgf$Percentage_Prev_ga == 100)] <- "Completely shared"
+
+prevdf_sp_sgf$Intersect_category <- as.factor(prevdf_sp_sgf$Intersect_category)
+prevdf_sp_sgf$Intersect_category <- factor(prevdf_sp_sgf$Intersect_category, levels=c("Uniquely oral", "Oral origin",
+                                                                                      "Shared in upper digestive tract", 
+                                                                              "Upper GIT origin", "Uniquely upper GIT",
+                                                                                "Mostly shared", "Highly shared", "Completely shared",
+                                                                              "Shared in lower digestive tract",
+                                                                                "Fecal origin", "Uniquely fecal", "Saliva-feces"), ordered = TRUE)
+
+prevdf_sp_sgf_ordered <- prevdf_sp_sgf[order(prevdf_sp_sgf$Intersect_category, -prevdf_sp_sgf$Percentage_Prev_saliva,
+                                             prevdf_sp_sgf$Percentage_Prev_ga, prevdf_sp_sgf$Percentage_Prev_feces),]
+
+# Rename unasigned species (SGB)
+prevdf_sp_sgf_ordered <- prevdf_sp_sgf_ordered %>%
+  mutate(Name = case_when(
+    str_detect(Species, "GGB", negate = TRUE) ~ Species,
+    str_detect(Genus, "GGB", negate = TRUE) ~ Species,
+    str_detect(Family, "FGB", negate = TRUE) ~ paste(Family,Species),
+    str_detect(Order, "OFGB", negate = TRUE) ~ paste(Order, Species),
+    str_detect(Class, "CFGB", negate = TRUE) ~ paste(Class, Species),
+    str_detect(Class, "CFGB") ~ paste(Phylum, Species)
+  ))
+
+S3_Cat_SaUGitFe <- prevdf_sp_sgf_ordered
+
+# Count table per intersect category
+df_shared_sgf <- prevdf_sp_sgf_ordered %>%
+  group_by(Intersect_category) %>%
+  summarise(n_species = n_distinct(Name),
+            sum_meanAbundance_sa = sum(Mean_Abundance_saliva),
+            sum_meanAbundance_fe = sum(Mean_Abundance_feces),
+            sum_meanAbundance_ga = sum(Mean_Abundance_ga))
+
+S3_Cat_SaUGitFe_bis <- df_shared_sgf
+
+rm(prevdf_sp_sgf, prevdf_sp_sgf_fe, prevdf_sp_sgf_ga, prevdf_sp_sgf_sa, physeq_sp_sgf_fe, physeq_sp_sgf_ga, physeq_sp_sgf_sa, df_shared_sgf, prevdf_sp_sgf_ordered)
+```
+
+## Figure 3D
+```{r}
+sample_data(physeq_sp_sgf)$Body_site <- factor(
+  sample_data(physeq_sp_sgf)$Body_site,
+  levels = c("Saliva", "Upper GIT", "Feces"))
+  
+fig3d <- MicEco::ps_venn(physeq_sp_sgf,
+        group = "Body_site",
+        plot = TRUE, 
+        fill = c("#9AB9C2", "#B8CA7A", "#DCC04B"),
+        label=list(cex=2),
+        quantities = list(cex=4)
+        )
+fig3d
+
+rm(physeq_sp_sgf)
+```
+
+## Figure 3E
+```{r}
+prevdf_sp_all <- prevdf_sp_sgf_ordered
+prevdf_sp_all$Name <- str_replace_all(prevdf_sp_all$Name, "_", " ")
+rownames(prevdf_sp_all) <- prevdf_sp_all$Name
+
+# Split heatmap into 3 heatmaps: oral, fecal, shared
+# Keep only shared taxa (highly)
+prevdf_sp_hm_sharedsf <- prevdf_sp_all %>% filter(Intersect_category %in% c("Highly shared"))
+
+# Set color range
+col_fun = colorRamp2(c(0,0,0.1,1,5,10), c("white","white", "#B8DE29FF", "#29AF7FFF","#33638DFF", "#440154FF"))
+
+# Sharing Saliva - Feces HM
+hm_tab_sharedsf <- t(prevdf_sp_hm_sharedsf[,c(3, 11, 7)])
+rownames(hm_tab_sharedsf)[1] <- "Saliva"
+rownames(hm_tab_sharedsf)[2] <- "Upper GIT"
+rownames(hm_tab_sharedsf)[3] <- "Feces"
+
+# Split
+split_hm_shared = rep("Highly shared", 14)
+split_hm_shared <- as.factor(split_hm_shared)
+
+fig3e <- Heatmap(t(hm_tab_sharedsf), name = "Mean relative abundance", row_split = split_hm_shared,
+                             row_order =  rownames(prevdf_sp_hm_sharedsf),
+        col = col_fun, show_column_dend = FALSE, row_names_side = "right", column_names_side = "top",
+        column_names_rot = 90, border = TRUE, row_title = NULL, row_names_gp = gpar(fontsize = 11, fontface = 3),
+        heatmap_legend_param = list(direction = "horizontal", legend_width = unit(4,"cm")))   
+
+draw(fig3e, merge_legend = TRUE, heatmap_legend_side = "bottom")
+
+rm(prevdf_sp_all, prevdf_sp_hm_sharedsf, prevdf_sp_sgf_ordered, hm_tab_sharedsf, split_hm_shared, col_fun)
+```
