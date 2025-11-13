@@ -1,0 +1,73 @@
+---
+title: "Satellite Table 2"
+author: "Simon Yersin"
+date: "2025-11-13"
+output: html_document
+---
+
+Code to create Table 2 from the metadata
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, warning=FALSE, message=FALSE}
+library(readxl)
+library(gtsummary)
+library(stringr)
+library(dplyr)
+library(tidyr)
+library(tidyverse)
+```
+
+# Load metadata table
+```{r}
+metadata <- read_xlsx("../Supplementary_files/SupplementaryTableS1.xlsx")
+# 128 samples and 34 variables
+```
+
+# gt summary table 
+```{r}
+# Select columns of interest
+md_sum <- metadata %>% select(PatientID, Stunting_status, Age, Sex, Delivery_mode, Exudation_AAT, Gut_inflammation_Calpro)
+# Group by patients
+md_sum <- md_sum %>%
+  group_by(PatientID, Stunting_status, Age, Sex, Delivery_mode, Exudation_AAT, Gut_inflammation_Calpro) %>% 
+  summarise() %>% ungroup()
+# Cleaning
+md_sum$Stunting_status <- str_replace_all(md_sum$Stunting_status, "_", " ")
+md_sum$Sex <- str_replace_all(md_sum$Sex, "M", "Male")
+md_sum$Sex <- str_replace_all(md_sum$Sex, "F", "Female")
+md_sum$Exudation_AAT[which(md_sum$Exudation_AAT=="No_exudation")] <- "No exudation"
+md_sum$Gut_inflammation_Calpro[which(md_sum$Gut_inflammation_Calpro=="No_inflammation")] <- "No inflammation"
+# Add age groups
+md_sum <- md_sum %>%
+  mutate(Age_group = case_when(
+    Age >= 24 & Age < 36 ~ "2-3 years old",
+    Age >= 36 & Age < 48 ~ "3-4 years old",
+    Age >= 48 & Age < 60 ~ "4-5 years old",
+    Age >= 60 ~ "5 years old")
+  )
+# Do gt summary
+md_sum %>% 
+  select(Stunting_status, Age, Age_group, Sex, Delivery_mode,Exudation_AAT,
+         Gut_inflammation_Calpro) %>%
+  tbl_summary(by = Stunting_status,
+              missing = "no",
+              label = c(Age ~ "Age [months]",
+                        Age_group ~ "Age group",
+                        Delivery_mode ~ "Delivery mode",
+                        Exudation_AAT ~ "Alpha1-antitrypsin",
+                        Gut_inflammation_Calpro ~ "Calprotectin")) %>%
+  modify_header(label = "**Variable**") %>%
+  add_overall() %>%
+  as_gt() #%>%
+  gt::gtsave(filename = "Table2.docx")
+```
+
+
+
+
+
+
+
