@@ -1,0 +1,378 @@
+---
+title: "Satellite Figure 5"
+author: "Simon Yersin"
+date: "2025-11-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Laod library
+```{r, message=FALSE}
+library(ComplexHeatmap)
+library(circlize)
+library(treeio)
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(ComplexHeatmap)
+library(stringr)
+library(ggplot2)
+library(data.table)
+library(phyloseq)
+```
+
+## Figure 5A
+```{r}
+fastANI_sym <- as.data.frame(read_xlsx("../Supplementary_files/SupplementaryTableS4.xlsx", sheet = 5))
+rownames(fastANI_sym) <- fastANI_sym$StrainID
+hm_fastani <- fastANI_sym[,c(5:92)]
+rownames(hm_fastani) <- fastANI_sym$StrainID
+hm_fastani <- as.matrix(hm_fastani)
+
+fastANI_sym$classification <- str_remove(fastANI_sym$classification,
+                                     "d__Bacteria;p__Bacillota;c__Bacilli;o__Lactobacillales;f__Streptococcaceae;g__Streptococcus;")
+fastANI_sym$classification[which(fastANI_sym$classification=="s__")] <- "Streptococcus"
+fastANI_sym$classification <- str_remove(fastANI_sym$classification,
+                                     "s__")
+row_annot <- rowAnnotation(source = fastANI_sym$Source, patientID = fastANI_sym$PatientID, strain = fastANI_sym$classification,
+                                  col = list(source=c("Blood" = "#cc0000",
+                                                  "Duodenum" = "#8fce00",
+                                                  "Gastric aspirate" = "#6aa84f",
+                                                  "Saliva" = "#3d85c6",
+                                                  "Stool" = "#ce7e00"
+                                                  ),
+                                             patientID=c("AGN002"="#e06666", "AGN004"="#f6b26b", "AGN008"="#ffd966","AGN010"="#b6d7a8",
+                                                         "AGN022"="#9fc5e8", "AGN034"="#c27ba0","AGN036"="#990000","AGN039"="#bf9000","AGN045"="#134f5c",
+                                                         "AGN018"="#a2c4c9","AGN037"="#b45f06",
+                                                         "AGN041"="#38761d","AGN046"="#351c75","AGN032"="#8e7cc3","Type_strain"="#cc0000"),
+                                             strain=c("Streptococcus salivarius"="#f11316",
+                                                      "Streptococcus salivarius_D"="#cc0009")),
+                                  annotation_label = c("Source", "PatientID", "Strains"), 
+                            annotation_name_side = "top")
+col_fun = colorRamp2(c(90,95,98,99,99.9999,100), c("white", "white", "#85D54AFF", "#1E9B8AFF", "#33638DFF", "#440154FF"))
+
+fig5a <- Heatmap(hm_fastani, name = "ANI distance",col = col_fun, show_row_dend = FALSE, show_column_dend = FALSE,
+        right_annotation = row_annot, show_row_names = TRUE, row_names_side = "left",
+        row_names_gp = gpar(fontsize = 8),column_names_gp = gpar(fontsize = 8), border = TRUE)
+
+
+fig5a
+
+rm(fastANI_sym, hm_fastani, row_annot, col_fun)
+```
+
+## Figure 5B
+```{r}
+tree <- read_xlsx("../Supplementary_files/SupplementaryTableS4.xlsx", sheet = 9, col_names = FALSE)
+newick_string <- tree[1, 1][[1]]
+tree_trans <- read.tree(text=newick_string)
+
+tree_trans <- ape::root(tree_trans, node = 161)
+#Drop tip of unwanted isolates
+tree_trans <- drop.tip(tree_trans, c("SAT340","SAT513","SAT551", "SAT894", "AFB477", "AFB570", "SsalTypeStrain"))
+ordered_tips <- tree_trans$tip.label
+
+# Load Traits
+phylo_md <- read_xlsx("../Supplementary_files/SupplementaryTableS2.xlsx")
+colnames(phylo_md)[1] <- "StrainID"
+colnames(phylo_md)[3] <- "PatientID"
+phylo_md$Source[which(phylo_md$Source=="Stool")] <- "Feces"
+phylo_md$Source[which(phylo_md$Source=="Gastric aspirate")] <- "Gastric"
+phylo_md <- phylo_md %>% filter(StrainID %in% ordered_tips)
+
+trait_source <- phylo_md[,c("StrainID", "Source")]
+rownames(trait_source ) <- trait_source$StrainID
+trait_source  <- trait_source[ordered_tips, "Source", drop = TRUE]
+names(trait_source ) <- tree_trans$tip.label 
+
+trait_indiv  <- phylo_md[,c("StrainID", "PatientID")]
+rownames(trait_indiv) <- trait_indiv$StrainID
+trait_indiv <- trait_indiv[ordered_tips, "PatientID", drop = TRUE]
+names(trait_indiv) <- tree_trans$tip.label 
+
+p <- ggtree(tree_trans) +
+  geom_tiplab(align = TRUE, size = 2.5)
+
+# Define colors
+pal_source_colors <- c(
+  #"Blood" = "#cc0000",
+  "Duodenum" = "#EDE692",
+  "Gastric" = "#BBDEEC",
+  "Saliva" = "#9AB9C2",
+  "Feces" = "#DCC04B"
+)
+
+# First heatmap: Source — very close to the tree
+p <- gheatmap(p,
+              data.frame(Source = trait_source),
+              offset = 0.003,  
+              width = 0.06, 
+              colnames = TRUE) +
+  scale_fill_manual(values = pal_source_colors, name = "Source")
+
+# New fill scale for second trait
+p <- p + ggnewscale::new_scale_fill()
+
+pal_patientID_colors <- c(
+  "AGN005"="#9090bb",
+  "AGN002"="#e06666", "AGN004"="#f6b26b", "AGN008"="#ffd966", "AGN010"="#b6d7a8",
+  "AGN014"="#741b47", "AGN015"="#8fce20", "AGN019"="#ffab99",
+  "AGN022"="#9fc5e8", "AGN025"="#faa120", "AGN026"="#99aacc", "AGN028" = "#cc5010",
+  "AGN030" = "#aaffff", "AGN031" = "#109090", "AGN035" = "#cc99ac", "AGN043" = "#505050",
+  "AGN034"="#c27ba0", "AGN036"="#990000", "AGN039"="#bf9000", "AGN045"="#134f5c",
+  "AGN018"="#a2c4c9", "AGN037"="#b45f06", "AGN044"="#caca90", "AGN047" ="#0099cc",
+  "AGN041"="#38761d", "AGN046"="#351c75", "AGN032"="#8e7cc3"
+)
+
+# Second heatmap: Individual — immediately next to Source
+p <- gheatmap(p,
+              data.frame(PatientID = trait_indiv),
+              offset = 0,  
+              width = 0.06, 
+              colnames = TRUE) +
+  scale_fill_manual(values = pal_patientID_colors, name = "Patient ID")
+
+fig5b <- p
+
+fig5b
+
+rm(p, phylo_md, tree, tree_trans, newick_string, ordered_tips, pal_patientID_colors, pal_source_colors, trait_indiv, trait_source)
+```
+
+## Figure 5C
+```{r}
+transmission_hp <- read_xlsx("../Supplementary_files/SupplementaryTableS4.xlsx", sheet = 10)
+
+transmission_hp <- transmission_hp %>% 
+  mutate(SharingEvent = str_c(SampleID, "_", Shared_strain))
+transmission_hp <- transmission_hp[,c(1,4)]
+transmission_hp <- transmission_hp %>% mutate(Count = 1)
+transmission_set <- pivot_wider(transmission_hp, names_from = SharingEvent, values_from = Count, values_fill = 0)
+
+transmission_set <- t(transmission_set)
+colnames(transmission_set) <- transmission_set[1,]
+transmission_set <- transmission_set[-1,]
+
+transmission_set_m <- as.matrix(apply(transmission_set, 2, as.numeric))
+comb_mat <- make_comb_mat(transmission_set_m, mode = "intersect")
+cs = comb_size(comb_mat)
+ss = set_size(comb_mat)
+
+fig5c = UpSet(comb_mat,
+      set_order = c("inStrain","StrainPhlAn","Isolations"),  
+      comb_order = order(comb_size(comb_mat), decreasing = TRUE),
+      top_annotation = HeatmapAnnotation(
+        "Transmission \nevents detected" = anno_barplot(cs, 
+            ylim = c(0, max(cs)*1.1),
+            border = FALSE, 
+            gp = gpar(fill = "black"), 
+            height = unit(4, "cm")
+        ), 
+        annotation_name_side = "left", 
+        annotation_name_rot = 90,
+        annotation_name_gp = gpar(fontsize = 12,face = 3)),
+      left_annotation = rowAnnotation(
+        "Transmission events \ndetected by method" = anno_barplot(-ss, 
+            baseline = 0,
+            axis_param = list(
+                at = c(0, -5, -10, -15),
+                labels = c(0, 5, 10, 15),
+                labels_rot = 0),
+            border = FALSE, 
+            gp = gpar(fill = "black"), 
+            width = unit(4, "cm")
+        ),
+        set_name = anno_text(set_name(comb_mat),
+            gp = gpar(fontsize=12,face = 3),
+            location = 0.5, 
+            just = "center",
+            width = max_text_width(set_name(comb_mat)) + unit(1, "mm")),
+        annotation_name_gp = gpar(fontsize = 12,face = 3)
+    ), 
+    right_annotation = NULL,
+    show_row_names = FALSE)
+
+
+od = column_order(fig5c)
+rd = row_order(fig5c)
+
+
+fig5c = draw(fig5c)
+decorate_annotation("Transmission \nevents detected", {
+    grid.text(cs[od], x = seq_along(cs), y = unit(cs[od], "native") + unit(2, "pt"), 
+        default.units = "native", just = c("left", "bottom"), 
+        gp = gpar(fontsize = 8,face = 3, col = "#404040"), rot = 45)
+})
+
+
+rm(comb_mat, transmission_hp, transmission_set, transmission_set_m)
+```
+
+## Figure 5D
+```{r}
+genomes <- read_xlsx("../Supplementary_files/SupplementaryTableS4.xlsx", sheet = 11)
+
+
+genomes_filt <- genomes %>%
+  filter(breadth > 0.2 ) %>%
+  filter(coverage_median >= 3)
+
+genomes_filt <- genomes_filt %>%
+  mutate(Body_site = substr(Sample, 7, 8)) %>%
+    mutate(Body_site = case_when(
+    Body_site == "FE" ~ "Feces", 
+    Body_site == "SA" ~ "Saliva",
+    Body_site == "GA" ~ "Gastric",
+    Body_site == "DU" ~ "Duodenum"
+  ))
+
+genomes_filt$Body_site <- factor(genomes_filt$Body_site, levels = c("Saliva", "Gastric", "Duodenum", "Feces"))
+
+comparisons <- list(
+  c("Saliva", "Gastric"),
+  c("Saliva", "Duodenum"),
+  c("Saliva", "Feces"),
+  c("Gastric", "Duodenum"),
+  c("Gastric", "Feces"),
+  c("Duodenum", "Feces")
+)
+
+wilcox_results <- lapply(comparisons, function(comp) {
+  site1 <- comp[1]
+  site2 <- comp[2]
+  
+  data1 <- genomes_filt %>% filter(Body_site == site1) %>% pull(nucl_diversity)
+  data2 <- genomes_filt %>% filter(Body_site == site2) %>% pull(nucl_diversity)
+  
+  test <- wilcox.test(data1, data2)
+  
+  tibble(
+    Group1 = site1,
+    Group2 = site2,
+    W = test$statistic,
+    p_value = test$p.value
+  )
+})
+
+# Bind all into one table
+wilcox_table <- bind_rows(wilcox_results) %>%
+  mutate(significance = case_when(
+    p_value < 0.001 ~ "***",
+    p_value < 0.01  ~ "**",
+    p_value < 0.05  ~ "*",
+    TRUE ~ "ns"
+  ))
+
+wilcox_table
+
+fig5d <- ggplot(genomes_filt, aes(x=Body_site, y = 100*nucl_diversity, fill = Body_site)) + 
+  geom_boxplot(aes(fill = Body_site), 
+             outlier.colour = NA) +
+  geom_jitter(width = 0.2, alpha = 0.3, size = 0.5) +
+  scale_fill_manual(values = c(
+    Feces = "#DCC04B",
+    Saliva = "#9AB9C2",
+    Gastric = "#BBDEEC",
+    Duodenum = "#EDE692"
+  )) +
+  theme_minimal(base_size = 14) +
+  labs(x = "", y = "Nucleotide diversity (%)") +
+  theme(legend.position = "none")
+
+fig5d
+
+rm(genomes, genomes_filt, wilcox_table, wilcox_results, comparisons)
+```
+
+## Figure 5E
+```{r}
+instrain_cdf <- read.delim2("output/instrain_compare_comparisonsTable.tsv", sep = "\t")
+
+instrain_cdf$name1 <- str_remove_all(instrain_cdf$name1, "_sorted_allGenomesMapped.bam")
+instrain_cdf$name2 <- str_remove_all(instrain_cdf$name2, "_sorted_allGenomesMapped.bam")
+
+instrain_cdf <- instrain_cdf %>%
+  mutate(Sample1 = substr(name1, 1, 6)) %>%
+  mutate(Sample2 = substr(name2, 1, 6)) %>%
+  mutate(Same_Dif = case_when(
+    Sample1 == Sample2 ~ "Within individuals",
+    Sample1 != Sample2 ~ "Between individuals"
+  ))
+
+instrain_cdf$Same_Dif <- factor(instrain_cdf$Same_Dif, levels = c("Within individuals", "Between individuals"))
+
+instrain_cdf$popANI <- as.numeric(instrain_cdf$popANI)
+#not independent
+wilcox.test(popANI ~ Same_Dif, data = instrain_cdf)
+
+fig5e <- ggplot(instrain_cdf, aes(x = Same_Dif, y = popANI, fill = Same_Dif)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.7) +
+  #geom_jitter(width = 0.2, alpha = 0.3, size = 0.5) +
+  scale_fill_manual(values = c("Within individuals" = "#93c47d", "Between individuals" = "#c47d93")) +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "none") +
+  labs(x = "", y = "popANI")
+
+fig5e
+
+rm(instrain_cdf)
+```
+
+## Figure 5F
+```{r}
+bh_ratio_feces <- read_xlsx("../Supplementary_files/SupplementaryTableS4.xlsx", sheet = 8)
+bh_ratio_feces <- bh_ratio_feces %>% filter(Sample != "AGN001FE")
+# We are left with 43 samples
+
+# Effect of calprotectin inflammation on host reads removed
+summary(lm(Removed ~ Gut_inflammation_Calpro, data = bh_ratio_feces))
+bh_ratio_feces$Gut_inflammation_Calpro
+bh_ratio_feces_inf <- bh_ratio_feces %>% filter(Gut_inflammation_Calpro =="Inflammation")
+mean(bh_ratio_feces_inf$Removed)
+bh_ratio_feces_ninf <- bh_ratio_feces %>% filter(Gut_inflammation_Calpro =="No_inflammation")
+mean(bh_ratio_feces_ninf$Removed)
+
+summary(lm(lnBH_ratio ~ haz_cont + Gut_inflammation_Calpro, data = bh_ratio_feces))
+fit <- lm(lnBH_ratio ~ haz_cont + Gut_inflammation_Calpro, data = bh_ratio_feces)
+# Extract summary info
+summary_fit <- summary(fit)
+# Extract p-values
+p_haz_cont <- summary_fit$coefficients["haz_cont", "Pr(>|t|)"]
+p_gut_inf <- summary_fit$coefficients["Gut_inflammation_CalproNo_inflammation", "Pr(>|t|)"]
+# Extract R-squared and F-test p-value
+r_squared <- summary_fit$r.squared
+f_pvalue <- pf(summary_fit$fstatistic[1], summary_fit$fstatistic[2], summary_fit$fstatistic[3], lower.tail=FALSE)
+# Format text annotation with some rounding
+annotation_text <- paste0(
+  "p(haz) = ", signif(p_haz_cont, 3), "\n",
+  "p(calprotectin) = ", signif(p_gut_inf, 3), "\n",
+  "R² = ", signif(r_squared, 3), "\n",
+  "F-test p = ", signif(f_pvalue, 3)
+)
+
+bh_ratio_feces$Gut_inflammation_Calpro <- str_replace_all(bh_ratio_feces$Gut_inflammation_Calpro, "_", " ")
+
+fig5f <- ggplot(bh_ratio_feces, aes(x = haz_cont, y = lnBH_ratio, color = Gut_inflammation_Calpro)) +
+  geom_point(size = 2) +
+  geom_smooth(method = "lm", se = FALSE) +
+  scale_color_manual(values = c( "#e06666", "#93c47d")) +
+  labs(
+    x = "heigth-for-age z-score",
+    y = "ln(Bacterial-to-host reads ratio)",
+    color = "Calprotectin"
+  ) +
+  annotate("text", 
+           x = -0.7, y = 4, 
+           label = annotation_text, 
+           hjust = 0, vjust = 1,
+           size = 4,
+           color = "black") +
+  theme_minimal()
+
+fig5f
+
+rm(bh_ratio_feces, bh_ratio_feces_inf, bh_ratio_feces_ninf, fit, summary_fit, annotation_text, f_pvalue, p_gut_inf, p_haz_cont, r_squared)
+```
