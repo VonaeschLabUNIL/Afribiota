@@ -1,0 +1,364 @@
+---
+title: "Satellite Figure 4"
+author: "Simon Yersin"
+date: "2025-11-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, message=FALSE}
+library(readxl)
+library(stringr)
+library(dplyr)
+library(ape)
+library(ggplot2)
+library(glue)
+library(ggtree)
+library(ggmsa)
+library(tidyr)
+```
+
+Load metadata
+```{r}
+md <- as.data.frame(read_xlsx("../Supplementary_files/SupplementaryTableS1.xlsx"))
+rownames(md) <- md$SampleID
+```
+
+StrainPhlAn3 analysis
+```{r}
+MetaPhlan_tax <- as.data.frame(read_xlsx("../Supplementary_files/SupplementaryTableS3.xlsx", sheet = 2, skip = 1))
+# Extract taxonomy
+MetaPhlan_tax <- str_split_fixed(MetaPhlan_tax$clade_name, "\\|[p,c,o,f,g,s,t]__", 8)
+MetaPhlan_tax <- as.data.frame(MetaPhlan_tax)
+MetaPhlan_tax[,1] <- str_remove(MetaPhlan_tax[,1], "k__")
+# Keeping only the rows with the complete taxonomy
+MetaPhlan_tax <- MetaPhlan_tax[-(which(MetaPhlan_tax[,8] == "")),]
+# Changing colnames
+colnames(MetaPhlan_tax) <- c("Kingdom", "Phylum", "Class","Order","Family","Genus","Species", "SGB")
+
+#Get the most abundant SGB from StrainPhlan
+Clades_StrainPhlan = read.delim("print_clades_only.tsv")
+
+Clades_StrainPhlan$Clade <- ifelse(
+    grepl("t__", Clades_StrainPhlan$Clade),  # Check if 'Clade' starts with 't__'
+    sub("t__", "", Clades_StrainPhlan$Clade), # Remove the 't__' if it exists
+    Clades_StrainPhlan$Clade                    # Otherwise, keep the original value
+  )
+
+## Merge taxonomy with clades
+Clades_StrainPhlan = left_join(Clades_StrainPhlan, MetaPhlan_tax, by = c("Clade" = "SGB"))
+
+
+#Get the list of SGB to test for strain sharing
+# Potential shared saliva - feces 
+Clades_StrainPhlan$Potential_shared_all <- sapply(Clades_StrainPhlan$Samples, function(samples) {
+  sample_list <- unlist(strsplit(samples, ","))
+  patient_ids <- gsub("(FE|SA|GA|DU)$", "", sample_list)  # Remove source type
+  source_types <- gsub("^AGN[0-9]+", "", sample_list)     # Keep only the source type
+
+  # Get patient IDs grouped by sample source
+  saliva_ids <- patient_ids[source_types == "SA"]
+  gastric_ids <- patient_ids[source_types == "GA"]
+  duodenal_ids <- patient_ids[source_types == "DU"]
+  feces_ids <- patient_ids[source_types == "FE"]
+
+  # Find shared patient IDs between saliva and feces
+  shared_ids_sf <- intersect(intersect(saliva_ids, feces_ids), intersect(duodenal_ids, gastric_ids))
+
+  # Return 1 if there's a shared patient ID, otherwise 0
+  if (length(shared_ids_sf) > 0) {
+    return(1)
+  } else {
+    return(0)
+  }
+})
+
+Clades_StrainPhlan$Potential_shared <- sapply(Clades_StrainPhlan$Samples, function(samples) {
+  sample_list <- unlist(strsplit(samples, ","))
+  patient_ids <- gsub("(FE|SA|GA|DU)$", "", sample_list)  # Remove source type
+  source_types <- gsub("^AGN[0-9]+", "", sample_list)     # Keep only the source type
+
+  # Get patient IDs grouped by sample source
+  saliva_ids <- patient_ids[source_types == "SA"]
+  gastric_ids <- patient_ids[source_types == "GA"]
+  duodenal_ids <- patient_ids[source_types == "DU"]
+  feces_ids <- patient_ids[source_types == "FE"]
+  # Find shared patient IDs between saliva and feces
+  shared_ids_sf <- intersect(saliva_ids, feces_ids)
+
+  # Return 1 if there's a shared patient ID, otherwise 0
+  if (length(shared_ids_sf) > 0) {
+    return(1)
+  } else {
+    return(0)
+  }
+})
+
+# Create a new data frame with the list of SGB to test
+SGB_to_test_df = Clades_StrainPhlan %>%
+  filter(Potential_shared_all == 1)
+
+SGB_to_test_sf =Clades_StrainPhlan %>% filter(Potential_shared == 1)
+
+## 4. Calculate normalised phylogenetic distances for all selected SGBs
+# Define the directory containing the tree files
+tree_directory <- "Best_trees"
+
+# List all files matching the pattern
+tree_files <- list.files(path = tree_directory, pattern = "RAxML_bestTree.*\\.StrainPhlAn4\\.tre", full.names = TRUE)
+
+# Extract tree names (without path)
+tree_names <- gsub("RAxML_bestTree\\.|\\.StrainPhlAn4\\.tre", "", basename(tree_files))
+
+# Import all trees into a list
+trees_list <- lapply(tree_files, read.tree)
+
+# Calculate total branch length for each tree
+total_branch_lengths <- sapply(trees_list, function(tree) sum(tree$edge.length))
+
+# Combine the tree names with their total branch lengths
+branch_lengths_df <- data.frame(TreeName = tree_names, TotalBranchLength = total_branch_lengths)
+
+# Normalize branch lengths and compute cophenetic distance matrix for each tree
+normalized_trees <- lapply(trees_list, function(tree) {
+  total_branch_length <- sum(tree$edge.length)  # Calculate total branch length
+  tree$edge.length <- tree$edge.length / total_branch_length  # Normalize branch lengths
+  dist_matrix <- cophenetic.phylo(tree)  # Compute cophenetic distance matrix
+  list(tree = tree, dist_matrix = dist_matrix)  # Store both the tree and its distance matrix
+})
+
+# Rename and clean the normalized_trees 
+normalized_trees_df <- lapply(normalized_trees, function(tree_data) {
+  dist_matrix <- tree_data$dist_matrix
+  dist_df <- as.data.frame(as.table(as.matrix(dist_matrix))) # Convert distance matrix to a data frame
+  colnames(dist_df) <- c("Strain1", "Strain2", "Distance") #renames the columns
+  dist_df <- dist_df %>% # Filter rows: only keep unique strain comparisons and non-zero distances
+    filter(as.character(Strain1) < as.character(Strain2)) %>%
+    filter(Distance > 0)
+  return(dist_df)
+})
+
+# Access the processed distance data frame for the first tree
+  #first_normalized_trees_df <- normalized_trees_df[[1]]
+
+# Extract SGB numbers from file names and combine data frames
+dist_df <- do.call(rbind, lapply(seq_along(normalized_trees_df), function(i) {
+  sgb_number <- sub(".*t__(SGB[0-9]+(?:_group)?)\\.StrainPhlAn4\\.tre", "\\1", basename(tree_files[i])) # Extract the SGB number with optional "_group" suffix
+  df <- normalized_trees_df[[i]] # Add SGB identifier to the data frame
+  df$Tree <- sgb_number  # Use the extracted SGB number (with or without _group)
+  return(df)
+}))
+
+# Add taxonomy to the dist_df data frame
+dist_df <- left_join(dist_df, Clades_StrainPhlan %>% 
+                       select(Clade, Species), by = c("Tree" = "Clade"))
+
+## 5. Strain sharing of all selected SGBs
+# Filter for strain pairs with distances less than 0.001 (based on what they used in Feehily et al, 2023)
+shared_strains_all <- subset(dist_df, Distance < 0.001) # 109
+n_distinct(shared_strains_all$Species) # 62 potentially shared strains (include both same and different individuals sharing)
+
+shared_strains_all <- shared_strains_all %>%
+  mutate(SampleID1 = paste0(str_remove(Strain1, "(SA|FE|GA|DU)$")))
+
+shared_strains_all <- shared_strains_all %>%
+  mutate(SampleID2 = paste0(str_remove(Strain2, "(SA|FE|GA|DU)$")))
+
+shared_strains_all = shared_strains_all %>%
+  mutate(Relationship = "")
+
+shared_strains_all$Relationship[which(shared_strains_all$SampleID1 == shared_strains_all$SampleID2)] = "Same_individual"
+shared_strains_all$Relationship[which(shared_strains_all$SampleID1 != shared_strains_all$SampleID2)] = "Different_individual"
+
+shared_strains_all = shared_strains_all %>%
+  mutate(Compartments = str_c(gsub("^AGN[0-9]+", "", shared_strains_all$Strain1), "_",
+                              gsub("^AGN[0-9]+", "", shared_strains_all$Strain2)))
+
+shared_df <- merge(Clades_StrainPhlan[,c(1,4:9)], shared_strains_all, by.x = "Clade", by.y = "Tree")
+S4_StrainPhlAn3 <- shared_df %>% filter(Relationship == "Same_individual")
+```
+
+## Figure 4A
+```{r}
+
+S4_StrainPhlAn3 <- as.data.frame(read_xlsx("../Supplementary_files/SupplementaryTableS4.xlsx", sheet = 1, range = "A2:O40"))
+
+
+S4_StrainPhlAn3 <- S4_StrainPhlAn3 %>%
+  mutate(Genus2 = case_when(
+    str_detect(Genus, "GGB", negate = TRUE) ~ Genus,
+    str_detect(Family, "FGB", negate = TRUE) ~ paste(Family,Species),
+    str_detect(Order, "OFGB", negate = TRUE) ~ paste(Order, Species),
+    str_detect(Class, "CFGB", negate = TRUE) ~ paste(Class, Species),
+    str_detect(Class, "CFGB") ~ paste(Phylum, Species)
+  ))
+
+pal_strainphlan <- c("#377EB8","#4DAF4A","#E41A1C","#FCCDE5","#FFED6F","#BEAED4","#FDC086",
+                     "#7570B3","#F781BF","#81bff7","#E7298A","#E6AB02")
+
+fig4a <- S4_StrainPhlAn3 %>%
+  ggplot(aes(x=Compartments, fill=Genus2)) +
+  geom_bar(color = "black") +
+  scale_fill_manual(values = pal_strainphlan) +
+  theme_minimal() +
+  theme(axis.text.x = element_blank(),
+        axis.title = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.position = "bottom") +
+  labs(fill = "Genus") + 
+  guides(fill = guide_legend(nrow = 3)) +
+  coord_flip()
+
+fig4a
+
+rm(S4_StrainPhlAn3, pal_strainphlan)
+```
+
+## Figure 4B
+```{r}
+# Load the tree file
+tree_ssal <- read.tree("RAxML_bestTree.t__SGB8007_group.StrainPhlAn4.tre")
+
+# Calculate the total branch length
+total_branch_length <- sum(tree_ssal$edge.length)
+
+# Normalize the branch lengths
+tree_ssal$edge.length <- tree_ssal$edge.length / total_branch_length
+
+dist_matrix <- cophenetic.phylo(tree_ssal)
+
+# Convert the distance matrix to a data frame
+dist_df_ssal <- as.data.frame(as.table(as.matrix(dist_matrix)))
+
+# Rename columns for clarity
+colnames(dist_df_ssal) <- c("Strain1", "Strain2", "Distance")
+dist_df_ssal <- subset(dist_df_ssal, as.character(Strain1) < as.character(Strain2))
+
+dist_df_ssal <- dist_df_ssal %>%
+  filter(Distance > 0)
+
+dist_df_ssal <- dist_df_ssal %>%
+  mutate(SampleID1 = paste0(str_remove(Strain1, "(SA|FE|GA|DU)$")))
+
+dist_df_ssal <- dist_df_ssal %>%
+  mutate(SampleID2 = paste0(str_remove(Strain2, "(SA|FE|GA|DU)$")))
+
+dist_df_ssal = dist_df_ssal %>%
+  mutate(Relationship = "")
+
+dist_df_ssal$Relationship[which(dist_df_ssal$SampleID1 == dist_df_ssal$SampleID2)] = "Same_individual"
+dist_df_ssal$Relationship[which(dist_df_ssal$SampleID1 != dist_df_ssal$SampleID2)] = "Different_individual"
+
+dist_df_ssal_same <- dist_df_ssal %>% filter(Relationship == "Same_individual")
+p_ssal_tree <- ggtree(tree_ssal) %<+% md 
+
+# Visualize sample name and node number for later 
+p_ssal_tree + geom_tippoint() +
+  geom_tiplab() + geom_text(aes(label=node), hjust=-.3)
+# Node: 107, 139
+
+fig4b <- ggtree(tree_ssal) %<+% md +
+  geom_tippoint(aes(color = Body_site), shape = 16, size = 5) +
+  geom_hilight(node=107, fill="#990000") + 
+  geom_hilight(node=139, fill="#990000") +
+  scale_color_manual(values = c(
+    Feces = "#DCC04B",
+    Saliva = "#9AB9C2",
+    Gastric = "#BBDEEC",
+    Duodenum = "#EDE692"
+  )) +
+  guides(color=guide_legend(title = "Body site")) + 
+  theme(legend.position="bottom") +
+  theme(
+    legend.position = "bottom",
+    text = element_text(size = 12),           
+    legend.text = element_text(size = 12),    
+    legend.title = element_text(size = 12),   
+    axis.text = element_text(size = 12),      
+    axis.title = element_text(size = 12)
+  )
+
+fig4b
+```
+
+## Figure 4C
+```{r}
+instrain_mags <- as.data.frame(read_xlsx("../Supplementary_files/SupplementaryTableS4.xlsx", sheet = 4, range = "A2:J451"))
+# Import genome wide comparison table (result from inStrain compare)
+# 449 observations 
+instrain_mags$genome <- str_remove_all(instrain_mags$genome, ".fa")
+instrain_mags$genome <- str_remove_all(instrain_mags$genome, ".scaffolds.min1000")
+
+# Get checkM and gtdb data about the genomes 
+mags_df <- as.data.frame(read_xlsx("../Supplementary_files/SupplementaryTableS4.xlsx", sheet = 2))
+is_mags_df <- mags_df
+is_mags_df$Bin_ID <- str_remove_all(is_mags_df$genome, ".scaffolds.min1000")
+is_mags_df <- is_mags_df[,c(1,17,18,20)]
+
+# Merge with inStrain table and cleaning
+instrain_mags_tax <- merge(is_mags_df, instrain_mags, by="genome")
+instrain_mags_tax <- instrain_mags_tax %>%
+    separate(classification, 
+             into = c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species"), 
+             sep = ";", 
+             remove = FALSE, 
+             fill = "right")
+instrain_mags_tax <- instrain_mags_tax %>%
+    dplyr::mutate(across(c(Kingdom, Phylum, Class, Order, Family, Genus, Species), 
+                  ~ gsub("^[d,p,c,o,f,g,s]__", "", .)))
+instrain_mags_tax$Species[which(instrain_mags_tax$Species == "")] <- instrain_mags_tax$Genus[which(instrain_mags_tax$Species== "")]
+instrain_mags_tax$Completeness <- as.numeric(instrain_mags_tax$Completeness)
+instrain_mags_tax$Contamination <- as.numeric(instrain_mags_tax$Contamination)
+# Cleaning sample names
+instrain_mags_tax$name1 <- str_replace_all(instrain_mags_tax$name1, "_sorted_allGenomesMapped.bam", "")
+instrain_mags_tax$name2 <- str_replace_all(instrain_mags_tax$name2, "_sorted_allGenomesMapped.bam", "")
+
+# Numeric for popANI and 
+instrain_mags_tax$popANI <- as.numeric(instrain_mags_tax$popANI)
+instrain_mags_tax$percent_compared <- as.numeric(instrain_mags_tax$percent_compared)
+
+# filtering dataset to only include strain-sharing comparisons based on inStrain recommended cutoffs
+instrain_mags_tax_filt <- instrain_mags_tax %>%
+  filter(popANI >= 0.99999 & percent_compared >= 0.5)
+# Remove sample AGN43DU
+instrain_mags_tax_filt <- instrain_mags_tax_filt %>%
+  filter(name1 != "AGN043DU") # 5 sharing events removed 
+
+# Add column with sample name
+instrain_mags_tax_filt <- instrain_mags_tax_filt %>%
+  mutate(SampleID = str_replace(name1, "(SA|FE|GA|DU)$", ""))
+# Add sharing compartments
+instrain_mags_tax_filt <- instrain_mags_tax_filt %>%
+  mutate(Compartment = paste0(str_extract(name1, "(SA|FE|GA|DU)$"), "_", str_extract(name2, "(SA|FE|GA|DU)$")))
+
+# Clean names
+instrain_mags_tax_filt$Genus[which(instrain_mags_tax_filt$Genus=="Haemophilus_A")] <- "Haemophilus"
+instrain_mags_tax_filt$Genus[which(instrain_mags_tax_filt$Genus=="Haemophilus_D")] <- "Haemophilus"
+
+# Add palette
+pal_instrain <- c("#377EB8","#8DD3C7","#4DAF4A","#d5a6bd","#E41A1C","#bdd5a6", "#d5a7a6","#d5d5a6",
+                  "#FCCDE5","#FFED6F","#7FC97F","#BEAED4","#FDC086","#ffe599","#D95F02",
+                  "#7570B3","#E7298A","#E6AB02","#6fa8dc")
+
+
+fig4c <- instrain_mags_tax_filt %>%
+  ggplot(aes(x=Compartment, fill=Genus)) +
+  geom_bar(color = "black") +
+  scale_fill_manual(values = pal_instrain) +
+  theme_minimal() +
+  theme(
+        legend.position = "bottom") +
+  labs(fill = "Genus") + 
+  guides(fill = guide_legend(nrow = 3)) +
+  coord_flip()
+
+fig4c
+
+rm(instrain_mags, instrain_mags_tax, is_mags_df, mags_df)
+```
