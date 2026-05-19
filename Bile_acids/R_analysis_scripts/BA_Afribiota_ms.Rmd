@@ -1,0 +1,785 @@
+---
+title: "Bile acids - Microbiota Manuscript"
+author: "Simon Yersin"
+date: "2025-02-03"
+output: html_document
+---
+
+This RMarkDown file present the code used to produce the figures and results tables included in the manuscript for the bile acids - microbiome data.
+The operation on the tables are included in the RMarkDown: BA_Microbiota_Afribiota_analysis which include the combat correaction of the BA data (Kelsey's code), the addition and filtering of the metadata (keeping only fecal samples), the taxonomy and abundance tables included in the phyloseq object.
+
+The tables are imported directly in their final published form here.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+Load libraries
+```{r, warning=FALSE}
+library(phyloseq)
+library(dplyr)
+library(tidyr)
+#library(RColorBrewer)
+library(vegan)
+library(glue)
+library(ggplot2)
+library(viridis)
+library(stringr)
+library(ggpmisc)
+library(microbiomeMarker)
+```
+Load tables and create phyloseq
+```{r}
+# Taxonomy table
+tax <- as.matrix(read.table("/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/Afribiota_tax_table.csv",
+                  header = TRUE, sep = ",", row.names = 1))
+taxonomy <- tax_table(tax)
+# Abundance table
+abun <- as.matrix(read.table("/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/Afribiota_abundance_table.csv",
+                   header = TRUE, sep = ",", row.names = 1, check.names = FALSE))
+abundance <- otu_table(abun, taxa_are_rows = TRUE)
+# Metadata table
+md <- read.table("/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/Afribiota_metadata.csv",
+                 header = TRUE, sep = ",", row.names = 1)
+metadata <- sample_data(md)
+
+# Merging phyloseq
+physeq= phyloseq(abundance, taxonomy)
+physeq = merge_phyloseq(metadata, physeq)
+# Relative abundance
+physeq_ra <- transform_sample_counts(physeq, function(x) 100*x/sum(x))
+
+# Dataframe for correlation
+asv_acid_df <- read.table("/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/Afribiota_correlation_df.csv",
+                 header = TRUE, sep = ",", row.names = 1)
+# Madagascar
+asv_acid_df_mad <- read.table("/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/Afribiota_Madagascar_correlation_df.csv",
+                 header = TRUE, sep = ",", row.names = 1)
+
+# Central African Republic
+asv_acid_df_car <- read.table("/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/Afribiota_CAR_correlation_df.csv",
+                 header = TRUE, sep = ",", row.names = 1)
+
+# Dataframe Upper/Lower quantile for lithoderivative
+df_upperlower_ld <- read.table("/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/Afribiota_lithoderivatives_quantile.csv",
+                 header = TRUE, sep = ",")
+rownames(df_upperlower_ld) <- df_upperlower_ld$id
+df_upperlower_ld_ps <- sample_data(df_upperlower_ld[,1:3])
+# Merging a simplified phyloseq
+physeq_ul= phyloseq(abundance, tax_table(tax[,1:7]))
+physeq_ul <- transform_sample_counts(physeq_ul, function(x) 100*x/sum(x))
+physeq_ul <- merge_phyloseq(physeq_ul, df_upperlower_ld_ps)
+
+```
+Fig S1: Inclusion flowchart
+```{r}
+physeq # 679 samples
+#count for flowchart 0
+dplyr::count(md, Country)
+# 216 from Central African Republic
+# 418 from Madagascar
+dplyr::count(md, Country, Nutritional_status)
+# 200 stunted from Madagascar
+# 218 non-stunted from Madagascar
+# 132 stunted from Central African Republic
+# 129 non-stunted from Central African Republic
+```
+## Table: EnvFit
+```{r}
+ps_pcoa <- physeq_ra
+# Bray-Curtis distance
+dist.bc <- phyloseq::distance(ps_pcoa, method = "bray")
+# Ordination
+test_PCoA <- ordinate(ps_pcoa, "PCoA", distance = dist.bc)
+vectorPCOA <- as.data.frame(test_PCoA$vectors[,1:2])
+# Get metadata
+META_envfit = as(sample_data(ps_pcoa), "matrix")
+# Env fit on bile acids 
+env.fit_BA <- envfit(vectorPCOA, META_envfit[,20:103], perm = 999)
+# Save envfit results
+envfit_tab_BA <- cbind(as.data.frame(env.fit_BA$vectors$r, decreasing = TRUE), as.data.frame(env.fit_BA$vectors$pvals, decreasing = TRUE))
+colnames(envfit_tab_BA)[1] <- "EnvFit Correlation Coefficient Bile Acids"
+colnames(envfit_tab_BA)[2] <- "EnvFit pvalues Bile Acids"
+write.csv(envfit_tab_BA, "/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/EnvFit_Rvalues_BA.csv", row.names = TRUE)
+
+# EnvFit on taxa
+ps_envfit <- tax_glom(ps_pcoa, "Genus")
+OTU_envfit = as(otu_table(ps_envfit), "matrix")
+otu_envfit <- as.data.frame(OTU_envfit)
+TAX_envfit = as(tax_table(ps_envfit), "matrix")
+tax_envfit <- as.data.frame(TAX_envfit)
+rownames(otu_envfit) <- make.unique(tax_envfit$Genus)
+otu_envfit <- t(otu_envfit)
+# Unassigned are often duplicated
+env.fit_TAX <- envfit(vectorPCOA, otu_envfit, perm = 999)
+# Save envfit results
+envfit_tab_TAX <- cbind(as.data.frame(env.fit_TAX$vectors$r, decreasing = TRUE), as.data.frame(env.fit_TAX$vectors$pvals, decreasing = TRUE))
+colnames(envfit_tab_TAX)[1] <- "EnvFit Correlation Coefficient Taxa"
+colnames(envfit_tab_TAX)[2] <- "EnvFit pvalues Taxa"
+write.csv(envfit_tab_TAX, "/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/EnvFit_Rvalues_Taxa.csv", row.names = TRUE)
+
+# Dataframe of envfit on bile acids
+df_envfit_BA <- scores(env.fit_BA, display=c("vectors"))
+df_envfit_BA <- df_envfit_BA*vegan:::ordiArrowMul(df_envfit_BA)
+df_envfit_BA <- as.data.frame(df_envfit_BA)
+df_envfit_BA$bile_acids <- rownames(df_envfit_BA)
+df_envfit_BA <- cbind(df_envfit_BA, as.data.frame(env.fit_BA$vectors$pvals))
+colnames(df_envfit_BA)[4] <- "pvalues"
+df_envfit_BA <- df_envfit_BA %>% filter(pvalues <= 0.05)
+r2_BA <- as.data.frame(t(as_data_frame(as.list(env.fit_BA$vectors$r))))
+r2_BA <- r2_BA %>% filter(V1 > 0.05)
+# Plot only BA with R2 above 10%
+df_envfit_BA <- df_envfit_BA %>%
+  filter(rownames(df_envfit_BA) %in% rownames(r2_BA))
+df_envfit_BA$bile_acids <- gsub("_r", "", df_envfit_BA$bile_acids)
+df_envfit_BA$bile_acids <- gsub("_", " ", df_envfit_BA$bile_acids)
+df_envfit_BA$bile_acids <- str_replace(df_envfit_BA$bile_acids, "^(.)", str_to_upper)
+
+# Dataframe of envfit on taxa
+df_envfit_TAX <- scores(env.fit_TAX, display=c("vectors"))
+df_envfit_TAX <- df_envfit_TAX*vegan:::ordiArrowMul(df_envfit_TAX)
+df_envfit_TAX <- as.data.frame(df_envfit_TAX)
+df_envfit_TAX$Taxa <- rownames(df_envfit_TAX)
+df_envfit_TAX <- cbind(df_envfit_TAX, as.data.frame(env.fit_TAX$vectors$pvals))
+colnames(df_envfit_TAX)[4] <- "pvalues"
+df_envfit_TAX <- df_envfit_TAX %>% filter(pvalues <= 0.05)
+r2_taxa <- as.data.frame(t(as_data_frame(as.list(env.fit_TAX$vectors$r))))
+r2_taxa <- r2_taxa %>% filter(V1 > 0.05)
+# Plot only taxa with R2 above 10%
+df_envfit_TAX <- df_envfit_TAX %>%
+  filter(Taxa %in% rownames(r2_taxa))
+
+# Plotting
+per_explained <- 100*test_PCoA$values$Relative_eig / sum(test_PCoA$values$Relative_eig)
+per_explained <- round(per_explained[1:2], digits = 1)
+labs <- c(glue("Axis1 [{per_explained[1]}%]"),
+          glue("Axis2 [{per_explained[2]}%]"))
+
+ft.scores <- as.data.frame(vectorPCOA)
+ft.scores$Country <- as.data.frame(META_envfit)$country
+ft.scores$Age <- as.data.frame(META_envfit)$age_years
+
+META_envfit_modif <- as.data.frame(META_envfit)
+META_envfit_modif$lithoderivatives_r <- as.numeric(META_envfit_modif$lithoderivatives_r)
+ft.scores$Litho_levels <- META_envfit_modif$lithoderivatives_r
+
+otu_envfit <- as_data_frame(otu_envfit)
+ft.scores$Taxa <- as.numeric(otu_envfit$Prevotella_9)
+
+
+figPCoA <- ggplot() +
+  geom_point(aes(ft.scores$Axis.1, ft.scores$Axis.2, color = ft.scores$Taxa),
+             size = 1.5, show.legend = TRUE) +
+  scale_colour_viridis(direction = -1) +
+  geom_segment(aes(x = 0, y = 0, xend = df_envfit_BA$Axis.1, yend = df_envfit_BA$Axis.2),
+            arrow = arrow(length = unit(0.2, "cm")), color="#808080", alpha=0.5) +
+  geom_text(aes(df_envfit_BA$Axis.1*1.04, df_envfit_BA$Axis.2*1.04, label = df_envfit_BA$bile_acids, family = "sans"),
+            color="#303030", size=4) +
+  geom_segment(aes(x = 0, y = 0, xend = df_envfit_TAX$Axis.1, yend = df_envfit_TAX$Axis.2),
+            arrow = arrow(length = unit(0.2, "cm")), color="darkred", alpha=0.2) +
+  geom_text(aes(df_envfit_TAX$Axis.1*1.04, df_envfit_TAX$Axis.2*1.04, label = df_envfit_TAX$Taxa, fontface=3, family = "sans"),
+            color="darkred", size=4) +
+  xlab(labs[1]) +
+  ylab(labs[2]) +
+  labs(colour = expression(paste(italic("Prevotella_9"), " relative abundance"))) +
+  theme_bw() +
+  theme(text=element_text(size = 12, family = "sans"), legend.position = c(0.12,0.12))
+
+pdf("/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/FigurePCoA.pdf", width = 12, height = 8)
+figPCoA
+dev.off()
+
+# Env Fit on other environmental variables
+env.fit_oth <- envfit(vectorPCOA, meta_envfit[,c(7,9,11,12,19)], perm = 999, na.rm = TRUE)
+as.data.frame(scores(env.fit_oth, display = "factors"))
+env.fit_oth$factors$pvals <= 0.05
+# Save envfit results
+envfit_tab_oth <- cbind(as.data.frame(env.fit_oth$factors$r, decreasing = TRUE), as.data.frame(env.fit_oth$factors$pvals, decreasing = TRUE))
+colnames(envfit_tab_oth)[1] <- "EnvFit Correlation Coefficient Other Variables"
+colnames(envfit_tab_oth)[2] <- "EnvFit pvalues Other Variables"
+write.csv(envfit_tab_oth, "/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/EnvFit_Rvalues_Others.csv", row.names = TRUE)
+```
+# Fig 5
+Correlation of bile acid levels with bacterial taxa in the feces
+A: Heatmap of correlations
+Correlations
+```{r, warning=FALSE}
+# Assess correlation between bile acids (col 1-84) and specific bacterial genera (col 85 - 277)
+# Non-parametric test: Kendall tau 
+corr_mat <- cor(asv_acid_df[,1:84],asv_acid_df[,85:277], method = "spearman")
+corr_df <- as.data.frame(corr_mat)
+corr_df <- corr_df %>% 
+  mutate(Bile_Acids = rownames(corr_df))
+corr_df <- corr_df %>% pivot_longer(cols = -Bile_Acids, names_to = "ASVs", values_to = "Correlation_coeff")
+
+# Adding p-values and beta coefficient in corr_df
+corr_df <- corr_df %>%
+  mutate(p_val = "") %>%
+  mutate(p_value_adjusted = "") %>%
+  mutate(b_coeff = "")
+k= 1
+for (i in 1:84) {
+  for (j in 85:277) {
+   p_value = cor.test(asv_acid_df[,i], asv_acid_df[,j],method = "spearman")[3]
+   corr_df$p_val[k] <- as.numeric(p_value)
+   b_coefficient = coef(lm(asv_acid_df[,i] ~ asv_acid_df[,j]))[2]
+   corr_df$b_coeff[k] <- as.numeric(b_coefficient)
+   k = k+1
+  }
+}
+# FDR-correction: Benjamini-Hochberg
+corr_df$p_value_adjusted <- p.adjust(corr_df$p_val, method = "BH")
+# Adding taxonomic information for ASVs
+corr_df <- merge(corr_df, tax, by.x = "ASVs", by.y = "ASVs", all.x = TRUE)
+# Saving correlation results
+#write.csv(corr_df, "/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/Correlation_results.csv", row.names = FALSE)
+```
+Linear model
+```{r}
+# Adding p-values and beta coefficient in lm_df
+lm_df <- data.frame(Bile_acids = character(),
+                    ASVs = character(),
+                    estimate = numeric(),
+                    std_error = numeric(),
+                    p_value = numeric(),
+                    p_value_adjusted = numeric(),
+                    r_squared = numeric(),
+                    adj_r_squared = numeric(),
+                    stringsAsFactors = FALSE)
+
+for (i in 1:84) {  
+  for (j in 85:277) {  
+    # Fit linear model
+    lm_model <- lm(asv_acid_df[,i] ~ asv_acid_df[,j], data = asv_acid_df)
+    lm_summary <- summary(lm_model)
+    
+    # Extract key results
+    estimate <- lm_summary$coefficients[2,1]  # Beta coefficient for predictor
+    std_error <- lm_summary$coefficients[2,2] # Standard Error
+    p_value <- lm_summary$coefficients[2,4]   # P-value for predictor
+    r_squared <- lm_summary$r.squared         # R²
+    adj_r_squared <- lm_summary$adj.r.squared # Adjusted R²
+    
+    # Store in the results data frame
+    lm_df <- rbind(lm_df, data.frame(
+      Bile_acids = colnames(asv_acid_df)[i],
+      ASVs = colnames(asv_acid_df)[j],
+      estimate = estimate,
+      std_error = std_error,
+      p_value = p_value,
+      p_value_adjusted = NA,
+      r_squared = r_squared,
+      adj_r_squared = adj_r_squared
+    ))
+  }
+}
+
+# FDR-lmection: Benjamini-Hochberg
+lm_df$p_value_adjusted <- p.adjust(lm_df$p_value, method = "BH")
+# Adding taxonomic information for ASVs
+lm_df <- merge(lm_df, tax, by.x = "ASVs", by.y = "ASVs", all.x = TRUE)
+#Filter for ASVs and BA in heatmap
+lm_df_hm <- lm_df %>% filter(Bile_acids %in% filter(corr_df, Correlation_coeff >= 0.4 | Correlation_coeff <= -0.4)$Bile_Acids &
+                                   ASVs  %in% filter(corr_df, Correlation_coeff >= 0.4 | Correlation_coeff <= -0.4)$ASVs)
+```
+## Fig 5A: heatmap
+Heatmap
+```{r}
+corr_df_hm <- corr_df %>% filter(Bile_Acids %in% filter(corr_df, Correlation_coeff >= 0.4 | Correlation_coeff <= -0.4)$Bile_Acids &
+                                   ASVs  %in% filter(corr_df, Correlation_coeff >= 0.4 | Correlation_coeff <= -0.4)$ASVs)
+corr_df_hm$Bile_Acids <- gsub("_r", "", corr_df_hm$Bile_Acids)
+corr_df_hm$Bile_Acids <- gsub("_", " ", corr_df_hm$Bile_Acids)
+corr_df_hm$Bile_Acids <- str_replace(corr_df_hm$Bile_Acids, "^(.)", str_to_upper)
+
+fig5a <- ggplot(corr_df_hm, aes(x=Bile_Acids, y=Genus, fill= Correlation_coeff)) +
+  geom_tile(colour='black') +
+  scale_fill_viridis(limits=c(-0.6, 0.6), breaks=seq(-0.5,0.5,by=0.25)) +
+  theme_minimal() +
+  labs(fill = "Correlation coefficient") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size = 12, family = "sans"),
+        axis.text.y = element_text(size=12, face =3, family = "sans"),
+        axis.title.x=element_blank(),
+        axis.title.y=element_blank())
+
+pdf("/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/Figure5A.pdf", width = 8, height = 4)
+fig5a
+dev.off()
+```
+## Fig 5 B: Upper/Lower quantile/Lefse
+```{r}
+physeq_ul <- tax_glom(physeq_ul,"Genus")
+physeq_ul <- subset_samples(physeq_ul, HL_lithoder != "Mid")
+
+lef_out_HL_lithodreivatives <- run_lefse(physeq_ul, wilcoxon_cutoff = 0.01, group = "HL_lithoder",
+                              taxa_rank = "Genus", kw_cutoff = 0.05, norm = "CPM", multigrp_strat = TRUE, lda_cutoff = 2)
+
+mt_lithod <- marker_table(lef_out_HL_lithodreivatives)
+mt_lithod$padjusted <- p.adjust(mt_lithod$pvalue, method = "BH")
+mt_lithod$padjustedFDR <- p.adjust(mt_lithod$pvalue, method = "fdr")
+
+abc_out_HL_lithodreivatives <- run_ancombc(physeq_ul,group = "HL_lithoder",
+                              taxa_rank = "Genus")
+
+plot_ef_bar(abc_out_HL_lithodreivatives) +
+  theme(legend.position = "bottom") +
+  scale_fill_manual(values = c("#E87D72","#00BFC4"))
+
+fig5b <- plot_ef_bar(lef_out_HL_lithodreivatives) +
+  theme(legend.position = "bottom") +
+  scale_fill_manual(values = c("#E87D72","#00BFC4"))
+
+pdf("/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/Figure5B.pdf", width = 7, height = 10)
+fig5b
+dev.off()
+
+# Chi square test
+# Filter out mid sample: keeping only high and low quantiles
+df_upperlower_ld <- df_upperlower_ld %>% filter(HL_lithoder != "Mid")
+list_tax <- as.list(colnames(df_upperlower_ld[,4:311]))
+#list_tax <- as.list(rownames(tax_table(physeq_ul)))
+# chi test
+df_upperlower_ld$HL_lithoder <- factor(df_upperlower_ld$HL_lithoder)
+df_upperlower_ld$HL_lithoder <- relevel(df_upperlower_ld$HL_lithoder, ref = "High")
+ld_pval_chi <- rep(NA, length(list_tax))
+for (i in 1:length(list_tax)) {
+  contingency_table <- table(df_upperlower_ld[,c(3+i)], df_upperlower_ld$HL_lithoder)
+  print(contingency_table)
+  print(colnames(df_upperlower_ld)[3+i])
+  chi_test_result <- chisq.test(contingency_table)
+  ld_pval_chi[i] <- chi_test_result$p.value*length(list_tax)
+  i =i+1
+}
+outcome_ld_chi <- data.frame(ld_pval_chi)
+rownames(outcome_ld_chi) <- list_tax
+outcome_ld_chi <- cbind(outcome_ld_chi, tax_table(physeq_ul))
+
+ps_ld_high <- subset_samples(physeq_ul, id %in% df_upperlower_ld$id[which(df_upperlower_ld$HL_lithoder == "High")])
+ps_ld_low <- subset_samples(physeq_ul, id %in% df_upperlower_ld$id[which(df_upperlower_ld$HL_lithoder == "Low")])
+# Prevalence
+prevdf_ld_high = apply(X= otu_table(ps_ld_high),
+               MARGIN = ifelse(taxa_are_rows(ps_ld_high),
+              yes =1, no =2), FUN = function(x){sum(x>0)})
+prevdf_ld_high = data.frame(Prevalence_ldhigh = prevdf_ld_high,
+                        PercentagePrev_ldhigh = 100*prevdf_ld_high/170,
+                        MeanAbundance_ldhigh = taxa_sums(ps_ld_high)/170)
+
+prevdf_ld_low = apply(X= otu_table(ps_ld_low),
+               MARGIN = ifelse(taxa_are_rows(ps_ld_low),
+              yes =1, no =2), FUN = function(x){sum(x>0)})
+prevdf_ld_low = data.frame(Prevalence_ldlow = prevdf_ld_low,
+                        PercentagePrev_ldlow = 100*prevdf_ld_low/170,
+                        MeanAbundance_ldlow = taxa_sums(ps_ld_low)/170,
+                        tax_table(ps_ld_low))
+prevdf_ld <- cbind(outcome_ld_chi[,1], prevdf_ld_high, prevdf_ld_low)
+
+prevdf_ld_sign <- prevdf_ld %>%
+  filter(outcome_ld_chi[, 1] <= 0.05)
+colnames(prevdf_ld_sign)[1] <- "Chi test pvalue"
+colnames(prevdf_ld_sign)[2] <- "Prevalence high lithoderivatives"
+colnames(prevdf_ld_sign)[3] <- "Prevalence % high lithoderivatives"
+colnames(prevdf_ld_sign)[4] <- "Mean abundance high lithoderivatives"
+colnames(prevdf_ld_sign)[5] <- "Prevalence low lithoderivatives"
+colnames(prevdf_ld_sign)[6] <- "Prevalence % low lithoderivatives"
+colnames(prevdf_ld_sign)[7] <- "Mean abundance low lithoderivatives"
+prevdf_ld_sign <- prevdf_ld_sign[,-14]
+write.csv(prevdf_ld_sign, "/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/Chitest_results_lithoderivatives.csv", row.names = TRUE)
+```
+## Fig 5: C-H: Correlation plots
+```{r}
+asv_acid_df_log <- cbind(rownames(asv_acid_df), asv_acid_df)
+colnames(asv_acid_df_log)[1] <- "id"
+colnames(asv_acid_df_log) <- gsub("_r", "", colnames(asv_acid_df_log))
+colnames(asv_acid_df_log) <- gsub("_", " ", colnames(asv_acid_df_log))
+colnames(asv_acid_df_log) <- str_replace(colnames(asv_acid_df_log), "^(.)", str_to_upper)
+
+fig5c <- asv_acid_df_log %>%
+  ggplot(aes(x=ASV777, y=Lithoderivatives)) +
+  geom_point() +
+  geom_smooth(method = lm, se = TRUE) +
+  theme_bw() +
+  theme(legend.position = "none", axis.title=element_text(size=10,family = "sans"), 
+        axis.title.x = element_text(face = 3, family = "sans"),
+        plot.title = element_text(size = 10, family = "sans")) +
+  ylab("Log Relative abundance") +
+  xlab("Ruminococcaceae_UCG-010") +
+  ggtitle("Lithocholic acid and derivatives")
+
+pdf("/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/Figure5C.pdf", height = 3, width = 3)
+fig5c
+dev.off()
+
+fig5d <- asv_acid_df_log %>%
+  ggplot(aes(x=ASV232, y=Lithoderivatives)) +
+  geom_point() +
+  geom_smooth(method = lm, se = TRUE) +
+  theme_bw() +
+  theme(legend.position = "none", axis.title=element_text(size=10,family = "sans"), 
+        axis.title.x = element_text(face = 3, family = "sans"),
+        plot.title = element_text(size = 10, family = "sans")) +
+  ylab("Log Relative abundance") +
+  xlab("Ruminococcaceae_UCG-005") +
+  ggtitle("Lithocholic acid and derivatives")
+
+pdf("/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/Figure5D.pdf", height = 3, width = 3)
+fig5d
+dev.off()
+
+fig5e <- asv_acid_df_log %>%
+  ggplot(aes(x=ASV61, y=Lithoderivatives)) +
+  geom_point() +
+  geom_smooth(method = lm, se = TRUE) +
+  theme_bw() +
+  theme(legend.position = "none", axis.title=element_text(size=10,family = "sans"), 
+        axis.title.x = element_text(face = 3, family = "sans"),
+        plot.title = element_text(size = 10, family = "sans")) +
+  ylab("Log Relative abundance") +
+  xlab("Ruminococcaceae_UCG-002") +
+  ggtitle("Lithocholic acid and derivatives")
+
+pdf("/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/Figure5E.pdf", height = 3, width = 3)
+fig5e
+dev.off()
+
+fig5f<- asv_acid_df_log %>%
+  ggplot(aes(x=ASV358, y=Lithoderivatives)) +
+  geom_point() +
+  geom_smooth(method = lm, se = TRUE) +
+  theme_bw() +
+  theme(legend.position = "none", axis.title=element_text(size=10,family = "sans"), 
+        axis.title.x = element_text(face = 3, family = "sans"),
+        plot.title = element_text(size = 10, family = "sans")) +
+  ylab("Log Relative abundance") +
+  xlab("Mollicutes_RF9") +
+  ggtitle("Lithocholic acid and derivatives")
+
+pdf("/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/Figure5F.pdf", height = 3, width = 3)
+fig5f
+dev.off()
+
+fig5g <- asv_acid_df_log %>%
+  ggplot(aes(x=ASV438, y=Lithoderivatives)) +
+  geom_point() +
+  geom_smooth(method = lm, se = TRUE) +
+  theme_bw() +
+  theme(legend.position = "none", axis.title=element_text(size=10,family = "sans"), 
+        axis.title.x = element_text(face = 3, family = "sans"),
+        plot.title = element_text(size = 10, family = "sans")) +
+  ylab("Log Relative abundance") +
+  xlab("Anaerotruncus") +
+  ggtitle("Lithocholic acid and derivatives")
+
+pdf("/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/Figure5G.pdf", height = 3, width = 3)
+fig5g
+dev.off()
+
+fig5h<- asv_acid_df_log %>%
+  ggplot(aes(x=ASV152, y=Lithoderivatives)) +
+  geom_point() +
+  geom_smooth(method = lm, se = TRUE) +
+  theme_bw() +
+  theme(legend.position = "none", axis.title=element_text(size=10,family = "sans"), 
+        axis.title.x = element_text(face = 3, family = "sans"),
+        plot.title = element_text(size = 10, family = "sans")) +
+  ylab("Log Relative abundance") +
+  xlab("[Eubacterium]_coprostanoligenes_group") +
+  ggtitle("Lithocholic acid and derivatives")
+
+pdf("/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/Figure5H.pdf", height = 3, width = 3)
+fig5h
+dev.off()
+
+
+```
+# Fig S3
+Bacteria-bile acid correlation plots
+## Fig S3A
+Correlation and Heatmap for Madagascar
+```{r, warning=FALSE}
+corr_mat_mad <- cor(asv_acid_df_mad[,1:84],asv_acid_df_mad[,85:359], method = "spearman")
+corr_df_mad <- as.data.frame(corr_mat_mad)
+corr_df_mad <- corr_df_mad %>% 
+  mutate(Bile_Acids = rownames(corr_df_mad))
+corr_df_mad <- corr_df_mad %>% pivot_longer(cols = -Bile_Acids, names_to = "ASVs", values_to = "Correlation_coeff")
+# Adding p-values and beta coefficient
+corr_df_mad <- corr_df_mad %>%
+  mutate(p_val = "") %>%
+  mutate(p_value_adjusted ="") %>%
+  mutate(b_coeff = "")
+k= 1
+for (i in 1:84) {
+  for (j in 85:359) {
+   p_value = cor.test(asv_acid_df_mad[,i], asv_acid_df_mad[,j],method = "spearman")[3]
+   corr_df_mad$p_val[k] <- as.numeric(p_value)
+   b_coefficient = coef(lm(asv_acid_df_mad[,i] ~ asv_acid_df_mad[,j]))[2]
+   corr_df_mad$b_coeff[k] <- as.numeric(b_coefficient)
+   k = k+1
+   j=j+1
+  }
+  i=i+1
+}
+#Benjamini-Hochberg correction for multiple testing
+corr_df_mad$p_value_adjusted <- p.adjust(corr_df_mad$p_val, method = "BH")
+# Adding taxonomic information for ASVs
+corr_df_mad <- merge(corr_df_mad, tax, by.x = "ASVs", by.y = "ASVs", all.x = TRUE)
+# Filtering
+corr_df_mad_hm <- corr_df_mad %>% filter(Bile_Acids %in% filter(corr_df_mad, Correlation_coeff >= 0.403 | Correlation_coeff <= -0.4)$Bile_Acids &
+                                   ASVs  %in% filter(corr_df_mad, Correlation_coeff >= 0.403 | Correlation_coeff <= -0.4)$ASVs)
+corr_df_mad_hm$Bile_Acids <- gsub("_r", "", corr_df_mad_hm$Bile_Acids)
+corr_df_mad_hm$Bile_Acids <- gsub("_", " ", corr_df_mad_hm$Bile_Acids)
+corr_df_mad_hm$Bile_Acids <- str_replace(corr_df_mad_hm$Bile_Acids, "^(.)", str_to_upper)
+# Figure
+figS3a <- ggplot(corr_df_mad_hm, aes(x=Bile_Acids, y=Genus, fill= Correlation_coeff)) +
+  geom_tile(colour='black') +
+  scale_fill_viridis(limits=c(-0.6, 0.6), breaks=seq(-0.5,0.5,by=0.25)) +
+  theme_minimal() +
+  labs(fill = "Correlation coefficient") +
+  ggtitle("Madagascar") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size = 12, family = "sans"),
+        axis.text.y = element_text(size=12, face =3, family = "sans"),
+        axis.title.x=element_blank(),
+        axis.title.y=element_blank(),
+        title = element_text(size = 12, family = "sans")) 
+
+pdf("/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/FigureS3A.pdf", width = 8, height = 4)
+figS3a
+dev.off()
+```
+## Fig S3B
+Correlation and Heatmap for Central African Republic
+```{r, warning=FALSE}
+corr_mat_car <- cor(asv_acid_df_car[,1:84],asv_acid_df_car[,85:334], method = "spearman")
+corr_df_car <- as.data.frame(corr_mat_car)
+corr_df_car <- corr_df_car %>% 
+  mutate(Bile_Acids = rownames(corr_df_car))
+corr_df_car <- corr_df_car %>% pivot_longer(cols = -Bile_Acids, names_to = "ASVs", values_to = "Correlation_coeff")
+# Adding p-values and beta coefficient
+corr_df_car <- corr_df_car %>%
+  mutate(p_val = "") %>%
+  mutate(p_value_adjusted = "") %>%
+  mutate(b_coeff = "")
+k= 1
+for (i in 1:84) {
+  for (j in 85:334) {
+   p_value = cor.test(asv_acid_df_car[,i], asv_acid_df_car[,j],method = "spearman")[3]
+   corr_df_car$p_val[k] <- as.numeric(p_value)
+   b_coefficient = coef(lm(asv_acid_df_car[,i] ~ asv_acid_df_car[,j]))[2]
+   corr_df_car$b_coeff[k] <- as.numeric(b_coefficient)
+   k = k+1
+   j=j+1
+  }
+  i=i+1
+}
+#Benjamini-Hochberg correction for multiple testing
+corr_df_car$p_value_adjusted <- p.adjust(corr_df_car$p_val, method = "BH")
+# Adding taxonomic information for ASVs
+corr_df_car <- merge(corr_df_car, tax, by.x = "ASVs", by.y = "ASVs", all.x = TRUE)
+#Filtering
+corr_df_car_hm <- corr_df_car %>% filter(Bile_Acids %in% filter(corr_df_car, Correlation_coeff >= 0.38 | Correlation_coeff <= -0.4)$Bile_Acids &
+                                   ASVs  %in% filter(corr_df_car, Correlation_coeff >= 0.38 | Correlation_coeff <= -0.4)$ASVs)
+corr_df_car_hm$Bile_Acids <- gsub("_r", "", corr_df_car_hm$Bile_Acids)
+corr_df_car_hm$Bile_Acids <- gsub("_", " ", corr_df_car_hm$Bile_Acids)
+corr_df_car_hm$Bile_Acids <- str_replace(corr_df_car_hm$Bile_Acids, "^(.)", str_to_upper)
+# Figure
+figS3b <- ggplot(corr_df_car_hm, aes(x=Bile_Acids, y=Genus, fill= Correlation_coeff)) +
+  geom_tile(colour='black') +
+  scale_fill_viridis(limits=c(-0.6, 0.6), breaks=seq(-0.5,0.5,by=0.25)) +
+  theme_minimal() +
+  labs(fill = "Correlation coefficient") +
+  ggtitle("Central African Republic") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1, size = 12, family = "sans"),
+        axis.text.y = element_text(size=12, face =3, family = "sans"),
+        axis.title.x=element_blank(),
+        axis.title.y=element_blank(),
+        title = element_text(size = 12, family = "sans")) 
+
+pdf("/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/FigureS3B.pdf", width = 8, height = 5)
+figS3b
+dev.off()
+```
+Correlation plot for other BA/ASVs
+## Fig S3C-H
+Correlation plot for other BA/ASVs
+Supplementary correlation: 3 strongest positive and 3 strongest negative
+```{r}
+figS3c <- asv_acid_df_log %>%
+  ggplot(aes(x=ASV61, y=`Alloisolithocholic acid`)) +
+  geom_point() +
+  geom_smooth(method = lm, se = TRUE) +
+  theme_bw() +
+  theme(legend.position = "none", axis.title=element_text(size=10,family = "sans"), 
+        axis.title.x = element_text(face = 3, family = "sans"),
+        plot.title = element_text(size = 10, family = "sans")) +
+  ylab("Log Relative abundance") +
+  xlab("Ruminococcaceae_UCG-002") +
+  ggtitle("Alloisolithocholic acid")
+
+pdf("/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/FigureS3C.pdf", height = 3, width = 3)
+figS3c
+dev.off()
+
+figS3d <- asv_acid_df_log %>%
+  ggplot(aes(x=ASV232, y=`Alloisolithocholic acid`)) +
+  geom_point() +
+  geom_smooth(method = lm, se = TRUE) +
+  theme_bw() +
+  theme(legend.position = "none", axis.title=element_text(size=10,family = "sans"), 
+        axis.title.x = element_text(face = 3, family = "sans"),
+        plot.title = element_text(size = 10, family = "sans")) +
+  ylab("Log Relative abundance") +
+  xlab("Ruminococcaceae_UCG-005") +
+  ggtitle("Alloisolithocholic acid")
+
+pdf("/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/FigureS3D.pdf", height = 3, width = 3)
+figS3d
+dev.off()
+
+figS3e <- asv_acid_df_log %>%
+  ggplot(aes(x=ASV61, y=`Dehydrolithocholic acid`)) +
+  geom_point() +
+  geom_smooth(method = lm, se = TRUE) +
+  theme_bw() +
+  theme(legend.position = "none", axis.title=element_text(size=10,family = "sans"), 
+        axis.title.x = element_text(face = 3, family = "sans"),
+        plot.title = element_text(size = 10, family = "sans")) +
+  ylab("Log Relative abundance") +
+  xlab("Ruminococcaceae_UCG-002") +
+  ggtitle("Dehydrolithocholic acid")
+
+pdf("/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/FigureS3E.pdf", height = 3, width = 3)
+figS3e
+dev.off()
+
+figS3f <- asv_acid_df_log %>%
+  ggplot(aes(x=ASV61, y=`Chenodeoxycholic acid`)) +
+  geom_point() +
+  geom_smooth(method = lm, se = TRUE) +
+  theme_bw() +
+  theme(legend.position = "none", axis.title=element_text(size=10,family = "sans"), 
+        axis.title.x = element_text(face = 3, family = "sans"),
+        plot.title = element_text(size = 10, family = "sans")) +
+  ylab("Log Relative abundance") +
+  xlab("Ruminococcaceae_UCG-002") +
+  ggtitle("Chenodeoxycholic acid")
+
+pdf("/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/FigureS3F.pdf", height = 3, width = 3)
+figS3f
+dev.off()
+
+figS3g <- asv_acid_df_log %>%
+  ggplot(aes(x=ASV61, y=`Lambda muricholic acid`)) +
+  geom_point() +
+  geom_smooth(method = lm, se = TRUE) +
+  theme_bw() +
+  theme(legend.position = "none", axis.title=element_text(size=10,family = "sans"), 
+        axis.title.x = element_text(face = 3, family = "sans"),
+        plot.title = element_text(size = 10, family = "sans")) +
+  ylab("Log Relative abundance") +
+  xlab("Ruminococcaceae_UCG-002") +
+  ggtitle("Lambda muricholic acid")
+
+pdf("/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/FigureS3G.pdf", height = 3, width = 3)
+figS3g
+dev.off()
+
+figS3h <- asv_acid_df_log %>%
+  ggplot(aes(x=ASV61, y=`Cholic acid`)) +
+  geom_point() +
+  geom_smooth(method = lm, se = TRUE) +
+  theme_bw() +
+  theme(legend.position = "none", axis.title=element_text(size=10,family = "sans"), 
+        axis.title.x = element_text(face = 3, family = "sans"),
+        plot.title = element_text(size = 10, family = "sans")) +
+  ylab("Log Relative abundance") +
+  xlab("Ruminococcaceae_UCG-002") +
+  ggtitle("Cholic acid")
+
+pdf("/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/FigureS3H.pdf", height = 3, width = 3)
+figS3h
+dev.off()
+```
+## Fig S3 I -M
+Supplementary correlation: Streptococcus, Lactobacillus, Bifidobacterium, Fusobacterium, Coproccus -1 
+```{r}
+figS3i <- asv_acid_df_log %>%
+  ggplot(aes(x=ASV16, y=Lithoderivatives)) +
+  geom_point() +
+  geom_smooth(method = lm, se = TRUE) +
+  theme_bw() +
+  theme(legend.position = "none", axis.title=element_text(size=10,family = "sans"), 
+        axis.title.x = element_text(face = 3, family = "sans"),
+        plot.title = element_text(size = 10, family = "sans")) +
+  ylab("Log Relative abundance") +
+  xlab("Streptococcus") +
+  ggtitle("Lithocholic acid and derivatives")
+  xlab("Streptococcus")
+
+pdf("/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/FigureS3I.pdf", height = 3, width = 3)
+figS3i
+dev.off()
+
+figS3j <- asv_acid_df_log %>%
+  ggplot(aes(x=ASV197, y=Lithoderivatives)) +
+  geom_point() +
+  geom_smooth(method = lm, se = TRUE) +
+  theme_bw() +
+  theme(legend.position = "none", axis.title=element_text(size=10,family = "sans"), 
+        axis.title.x = element_text(face = 3, family = "sans"),
+        plot.title = element_text(size = 10, family = "sans")) +
+  ylab("Log Relative abundance") +
+  xlab("Streptococcus") +
+  ggtitle("Lithocholic acid and derivatives")
+  xlab("Lactobacillus")
+
+pdf("/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/FigureS3J.pdf", height = 3, width = 3)
+figS3j
+dev.off()
+
+figS3k <- asv_acid_df_log %>%
+  ggplot(aes(x=ASV92, y=Lithoderivatives)) +
+  geom_point() +
+  geom_smooth(method = lm, se = TRUE) +
+  theme_bw() +
+  theme(legend.position = "none", axis.title=element_text(size=10,family = "sans"), 
+        axis.title.x = element_text(face = 3, family = "sans"),
+        plot.title = element_text(size = 10, family = "sans")) +
+  ylab("Log Relative abundance") +
+  xlab("Bifidobacterium") +
+  ggtitle("Lithocholic acid and derivatives")
+
+pdf("/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/FigureS3K.pdf", height = 3, width = 3)
+figS3k
+dev.off()
+
+figS3l <- asv_acid_df_log %>%
+  ggplot(aes(x=ASV353, y=Lithoderivatives)) +
+  geom_point() +
+  geom_smooth(method = lm, se = TRUE) +
+  theme_bw() +
+  theme(legend.position = "none", axis.title=element_text(size=10,family = "sans"), 
+        axis.title.x = element_text(face = 3, family = "sans"),
+        plot.title = element_text(size = 10, family = "sans")) +
+  ylab("Log Relative abundance") +
+  xlab("Fusobacterium") +
+  ggtitle("Lithocholic acid and derivatives")
+
+pdf("/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/FigureS3L.pdf", height = 3, width = 3)
+figS3l
+dev.off()
+
+figS3m <- asv_acid_df_log %>%
+  ggplot(aes(x=ASV426, y=Lithoderivatives)) +
+  geom_point() +
+  geom_smooth(method = lm, se = TRUE) +
+  theme_bw() +
+  theme(legend.position = "none", axis.title=element_text(size=10,family = "sans"), 
+        axis.title.x = element_text(face = 3, family = "sans"),
+        plot.title = element_text(size = 10, family = "sans")) +
+  ylab("Log Relative abundance") +
+  xlab("Coprococcus_1") +
+  ggtitle("Lithocholic acid and derivatives")
+
+pdf("/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/FigureS3M.pdf", height = 3, width = 3)
+figS3m
+dev.off()
+```
+
+

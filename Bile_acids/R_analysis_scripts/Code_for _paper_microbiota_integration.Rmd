@@ -1,0 +1,340 @@
+---
+title: "Code for paper"
+author: "Simon Yersin"
+date: "2024-06-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Library
+```{r, warning=FALSE}
+library(Biostrings)
+library(devtools)
+library(phyloseq)
+library(tidyr)
+library(plyr)
+library(readxl)
+library(dplyr)
+library(stringr)
+library(ggplot2)
+library(vegan)
+library(microbiome)
+library(ape)
+library(ggpubr)
+library(RColorBrewer)
+library(tidyverse)
+library(knitr)
+library(data.table)
+library(readr)
+library(glue)
+```
+
+# Loading tables
+## Taxonomy
+```{r}
+tax = read.delim("NOVOGEN_16s_SEQUENCING_BA_SIC_AND_CARLA_JULY_2023/Tables/taxonomy_JU_BA_SIC_AND_CARLA.txt", header = TRUE, sep = "\t")
+tax <- tax %>%
+  mutate(ASV = paste("ASV", seq(1:nrow(tax)), sep="")) %>%
+  mutate(SEQ = rownames(tax))
+row.names(tax) <- tax$ASV
+ASV_rownames <- rownames(tax)
+correspondence <-tax[,c(8:9)]
+tax=as.matrix(tax)
+tax <- tax[,-(8:9)]
+tax <- as.data.frame(tax)
+tax$Phylum[which(is.na(tax[,2]==TRUE))] <- "Unassigned"
+tax$Class[which(is.na(tax[,3]==TRUE))] <- "Unassigned"
+tax$Order[which(is.na(tax[,4]==TRUE))] <- "Unassigned"
+tax$Family[which(is.na(tax[,5]==TRUE))] <- "Unassigned"
+tax$Genus[which(is.na(tax[,6]==TRUE))] <- "Unassigned"
+tax$Species[which(is.na(tax[,7]==TRUE))] <- "Unassigned"
+tax=as.matrix(tax)
+taxonomy <- tax_table(tax)
+```
+## Abundance
+```{r}
+otu <- fread("NOVOGEN_16s_SEQUENCING_BA_SIC_AND_CARLA_JULY_2023/Tables/sequence_table_JU_BA_SIC_AND_CARLA.txt", skip = 1)
+t_otu <- t(otu)
+colnames(t_otu)=t_otu[c(1),]
+t_otu=t_otu[-c(1),]
+names(otu)[1] <- "ASV"
+rownames(t_otu) <- rownames(tax)
+t_otu<-as.matrix(t_otu)
+class(t_otu) <- "numeric"
+taxa = otu_table(t_otu, taxa_are_rows = TRUE)
+```
+## Metadata
+```{r}
+md <- read.csv("NOVOGEN_16s_SEQUENCING_BA_SIC_AND_CARLA_JULY_2023/Tables/Metadata.txt", header=TRUE, sep="\t")
+row.names(md) <- md$fastqID
+# Cleaning and reordering metadata:
+# Removing spaces
+md$NUT_STAT_DETAILED <- str_replace(md$NUT_STAT_DETAILED, " ", "_")
+md$BILE_ACID <- str_replace(md$BILE_ACID, " ", "_")
+md$BILE_STATES <- str_replace(md$BILE_STATES, " ", "_")
+md$BILE_STATES <- str_replace(md$BILE_ACID_DETAILED, " ", "_")
+# Add colum Region_NutStat 
+md <- md %>%
+  mutate(RegNutStat = str_c(REGION, "_", NUT_STAT))
+# Reordering column
+md <- md[,c(1,2,3,4,14,6,7,8,11,12,10,9,5,13)]
+```
+# Phyloseq
+```{r}
+physeq= phyloseq(taxa, taxonomy)
+metadata <- sample_data(md)
+physeq = merge_phyloseq(metadata, physeq)
+## Filtering
+physeq_filtered <- physeq %>%
+  subset_taxa(Family != "Mitochondria") %>%
+  subset_taxa(Order != "Chloroplast") %>%
+  subset_taxa(Kingdom !="Unassigned") %>%
+  subset_taxa(Kingdom != "Eukaryota")
+# 115'624 taxa : removed 297 ASVs
+# Relative abundance
+physeq_ra <- transform_sample_counts(physeq_filtered, function(x) 100*x/sum(x))
+```
+
+# Prepare genus phyloseq
+```{r}
+physeq_gen <- tax_glom(physeq_ra, "Genus")
+ps_gen_cons_all <- physeq_gen
+prevdf_gen_all = apply(X= otu_table(ps_gen_cons_all),
+               MARGIN = ifelse(taxa_are_rows(ps_gen_cons_all),
+              yes =1, no =2), FUN = function(x){sum(x>0)})
+prevdf_gen_all = data.frame(Prevalence = prevdf_gen_all,
+                        PercentagePrev = 100*prevdf_gen_all/270,
+                        MeanAbundance = taxa_sums(ps_gen_cons_all)/270,
+                        tax_table(ps_gen_cons_all))
+conservedG_all <- prevdf_gen_all %>%
+  filter(Prevalence == "270")
+```
+
+
+# Color palette
+```{r}
+palbrew_info <- brewer.pal.info[brewer.pal.info$category == "qual", ]  # Extract color info
+palbrew_all <- unlist(mapply(brewer.pal,                     # Create vector with all colors
+                              palbrew_info$maxcolors,
+                              rownames(palbrew_info)))
+pal_SIC <- palbrew_all[17:27]
+```
+
+# Ribbon plot
+```{r}
+# Start with a phyloseq object (tax, abundance, metadata tables), agglomerated to the genus level (can be any chosen level)
+# The phyloseq has been previously subseted to the taxa present in every samples of the dataset (prevalence maximum = 270)
+# Contain 1219 taxa
+ps_gen_cons_CtrlTcdc <- ps_gen_cons_all
+
+# We further subset the phyloseq based on the metadata. 
+# Here we select only the control and samples treated with Taurochenodeoxycholic acid (= Tcdc)
+ps_gen_cons_CtrlTcdc <- subset_samples(ps_gen_cons_CtrlTcdc, BILE_ACID =="CTRL" | BILE_ACID == "Taurochenodeoxycholic_acid")
+
+# we then calculate the prevalence of the taxa in this phyloseq
+prevdf_gen_CtrlTcdc = apply(X= otu_table(ps_gen_cons_CtrlTcdc),
+               MARGIN = ifelse(taxa_are_rows(ps_gen_cons_CtrlTcdc),
+              yes =1, no =2), FUN = function(x){sum(x>0)})
+prevdf_gen_CtrlTcdc = data.frame(Prevalence = prevdf_gen_CtrlTcdc,
+                        PercentagePrev = 100*prevdf_gen_CtrlTcdc/120,
+                        MeanAbundance = taxa_sums(ps_gen_cons_CtrlTcdc)/120,
+                        tax_table(ps_gen_cons_CtrlTcdc))
+# As there are 120 samples, we create a table with only these taxa based on the prevalence table created above
+conservedG_all_CtrlTcdc <- prevdf_gen_CtrlTcdc %>%
+  filter(Prevalence == "120")
+
+# The table with only the 100% prevalent taxa (called "conserved" here), is then use to filter the phyloseq
+ps_gen_cons_CtrlTcdc <- subset_taxa(ps_gen_cons_CtrlTcdc, rownames(tax_table(ps_gen_cons_CtrlTcdc)) %in%
+                                      rownames(conservedG_all_CtrlTcdc))
+# ps_gen_cons_CtrlTcdc contains is now a phyloseq object, agglomerate at the genus level, subset to the genera present in all ctrl and Tcdc samples
+
+# Melting the phyloseq object
+Tcdc_acidM <- psmelt(ps_gen_cons_CtrlTcdc)
+
+## Ordering the samples into levels for plotting
+# The .levels ordered the treatment 
+Tcdc_acidM.levels <- c("CTRL", "Taurochenodeoxycholic acid_0_25", "Taurochenodeoxycholic acid_0_5", "Taurochenodeoxycholic acid_1")
+# Create a data frame containing the treatments names, and a corresponding number giving the order we want them in
+Tcdc_dataM <- data.frame(
+  BILE_ACID_DETAILED = Tcdc_acidM.levels,
+  Tacids_num = 1:length(Tcdc_acidM.levels))
+## Joining the dataframe with the melted phyloseq to have an extra column with the number giving the order for the treatments
+Tcdc_acidM <- dplyr::left_join(Tcdc_acidM, Tcdc_dataM, by= "BILE_ACID_DETAILED")
+
+# Plot
+#pdf("Taurochenodeoxycholic_acid_Gchanges.pdf", width = 15, height = 8)
+
+# Suppress warning from geom_smooth and print the plot directly
+suppressWarnings(print(ggplot(Tcdc_acidM, aes(x=Tacids_num, y=Abundance)) + # Plotting the melted phyloseq, with x being the corresponding number and y the abundance
+  geom_point(colour = "black", size = 1.5) + # adding point, changing the color and size of the points (will create a black outline around the point)
+  geom_point(aes(color = SIC), size =1) + # Adding a layer of color to the point based on the SIC of origin 
+  geom_smooth(aes(color = SIC, fill = SIC), linewidth = 0.3) + # Adding the ribbon, colored and filled by SIC, changing the line width
+  scale_fill_manual(values = pal_SIC) + # Defining fill, using pal_SIC defined previously, give always the same fill to the same SIC
+  scale_color_manual(values = pal_SIC) + # Same than the fill, changing the color
+  scale_x_continuous( # Change the label on the x axis, instead of the number, we modify it to the treatment name 
+    breaks=1:length(Tcdc_acidM.levels),
+    labels=Tcdc_acidM.levels) +
+  facet_grid(RegNutStat~Genus, scales = "free_x") + # Create a grid with RegNutStat = Region + Nutritional Status as rows and Genus as column, setting scales free_x to avoid empty boxes
+    theme_bw() +
+    theme(legend.position = "right", ## small changes to the legend and text in the plot
+        strip.text = element_text( size = 5), axis.text.x =  element_text(angle = 45, hjust = 1)) +
+    ggtitle("Changes of genera present in CTRL SIC and SIC with Taurochenodeoxycholic acid") ## Set a title 
+))
+#dev.off()
+```
+
+
+# PCoA with arrows
+```{r}
+# Start with a phyloseq (physeq_fam) agglomerate at the family level
+physeq_fam <- tax_glom(physeq_ra, "Family")
+# Subset to have only ctrl and Chenodeoxycholic acid (cheno)
+ps_pcoa_cheno_F <- subset_samples(physeq_fam, BILE_ACID_DETAILED =="CTRL" |
+                             BILE_ACID =="Chenodeoxycholic_Acid"  )
+
+# Extract the abundance, tac and metadata table from the phuloseq object and set each table as data frame
+ABU_cheno = as(otu_table(ps_pcoa_cheno_F), "matrix")
+abu_cheno <- as.data.frame(ABU_cheno)
+TAX_cheno = as(tax_table(ps_pcoa_cheno_F), "matrix")
+tax_cheno <- as.data.frame(TAX_cheno)
+META_cheno = as(sample_data(ps_pcoa_cheno_F), "matrix")
+meta_cheno <- as.data.frame(META_cheno)
+
+# Add a colum with the SIC name and its nutritional status
+meta_cheno <- meta_cheno %>%
+  mutate(SIC_NUT_STAT = str_c(SIC, "_", NUT_STAT))
+
+# Add a colum giving the nutritional status only by U (undernourished) or N (normaly nourished)
+meta_cheno <- meta_cheno %>%
+  mutate(SIMPLE_NUTSTAT = "")
+meta_cheno$SIMPLE_NUTSTAT[which(meta_cheno$NUT_STAT=="Under")] <- "U"
+meta_cheno$SIMPLE_NUTSTAT[which(meta_cheno$NUT_STAT=="Normally")] <- "N"
+
+# Column bind the taxonomy and abundance table
+tax_otu <-cbind(tax_cheno, abu_cheno)
+
+# combine the complete taxonomy of each family in a new column
+tax_otu$Name <- str_c(tax_otu$Kingdom, '_',tax_otu$Phylum, '_', tax_otu$Class, '_', tax_otu$Order, '_', tax_otu$Family)
+# How many unique full taxonomy name we have? If different than the number of row, then some names are appearing several time
+# IN this case, use make unique fonction
+n_distinct(tax_otu$Name)
+# Set this column as character
+tax_otu[, 98] <- as.character(tax_otu[, 98])
+length(unique(tax_otu[,98])) # sanity check
+# Set the full taxonomy name as the row names
+rownames(tax_otu) <- tax_otu[,98]
+# Remove the taxonomy columns to keep only the abundances
+tax_otu <- tax_otu[,-c(1:7,98)]
+# Transpose 
+tax_otu <- t(tax_otu)
+# Set to numeric
+class(tax_otu) <- "numeric"
+# Set as data frame (transpose change to a matrix)
+tax_otu <- as.data.frame(tax_otu)
+# Create a new df in log10 
+tax_otu_log <-transform(tax_otu[, 1:90], 'log10')
+# Compute the distance matrix using bray method (vegan package)
+dist <- vegdist(tax_otu[, 1:90],  method = "bray")
+# Compute the PCoA with pcoa on the distance matrix
+PCOA <- pcoa(dist)
+# Extract the vectors of the axis 1 and 2 from the PCoA
+vectorPCOA <- cbind(PCOA$vectors[, 1:2])
+
+## Adding the arrows with envfit 
+# Compute the environmental vector with EnvFit on the log transform tax_otu table with 999 permutations
+env.fit <- envfit(vectorPCOA, tax_otu_log[,1:90], perm = 999) 
+# Extract vector score for the axis 1 and 2 for each taxa
+env.fit.sig  <- as.data.frame(scores(env.fit, display = "vectors"))
+# Change as a list the vectos
+env.fit.vect <- as.list(env.fit$vectors)
+## calculate coordinates for the arrows
+coordinates <- cbind(as.data.frame(env.fit.vect$arrows*sqrt(env.fit.vect$r)), as.data.frame(env.fit.vect$pvals))
+# Keep only the statistically significant arrows
+coordinates_sign <- subset(coordinates, as.data.frame(env.fit.vect$pvals) <= 0.05)
+# Add the name of the species
+coordinates_sign <- cbind(coordinates_sign, species = rownames(coordinates_sign))
+
+# Scale arrow and names
+df_envfit <- scores(env.fit,display=c("vectors"))
+# Fit the taxa name label at the end of the arrow using ordiArrowMul
+df_envfit <- df_envfit*vegan:::ordiArrowMul(df_envfit)
+df_envfit <- as.data.frame(df_envfit)
+df_envfit$species <- rownames(df_envfit)
+# Keep singificant species
+df_envfit <- df_envfit %>% 
+  filter(species %in% coordinates_sign$species)
+# Split the names
+arrows_names <- str_split_fixed(df_envfit$species, "_", 5)
+arrows_names <- as.data.frame(arrows_names)
+# Put the Phylum and Family name together for the plot (avoid having full tax)
+arrows_names <- as.data.frame(str_c(arrows_names$V2, '_', arrows_names$V5))
+df_envfit <- df_envfit %>% 
+  mutate(species_names = arrows_names$`str_c(arrows_names$V2, "_", arrows_names$V5)`)
+
+# Plotting!
+# Create a dataframe for plotting ft.scores
+# First the vectors
+ft.scores <- as.data.frame(vectorPCOA)
+# Then the fastqID
+ft.scores$fastqID <- rownames(tax_otu)
+# Sanity check 
+which(rownames(meta_cheno) != rownames(ft.scores))
+# Adding the detailed bile acid information, nutritional status, simplified nutritional status 
+ft.scores$BILE_ACID_DETAILED <- meta_cheno$BILE_ACID_DETAILED
+ft.scores$SIC <- meta_cheno$SIC_NUT_STAT
+ft.scores$SNU <- meta_cheno$SIMPLE_NUTSTAT
+
+# Add the % on the x and y axis using the glue library
+# Use the eigen vectors values from the PCoA 
+per_explained <- 100*PCOA$values$Relative_eig / sum(PCOA$values$Relative_eig)
+# Round it
+per_explained <- round(per_explained[1:2], digits = 1)
+# check for axis 1 and 2 
+per_explained[1:2]
+# Save the values for plotting
+labs <- c(glue("Axis1 [{per_explained[1]}%]"),
+          glue("Axis2 [{per_explained[2]}%]"))
+PCOA$vectors[,c(1,2)]
+# Calculate centroids of each triplicate to reduce the number of points
+centroid <- ft.scores %>%
+  group_by(SIC, BILE_ACID_DETAILED, SNU) %>%
+  summarise(axis1 = mean(Axis.1),
+            axis2 = mean(Axis.2), .groups = "drop")
+# Create sub dataframe to plot lines from centroids to centroids
+centroid_1 <- centroid %>%
+  filter(BILE_ACID_DETAILED == "CTRL" | BILE_ACID_DETAILED == "Chenodeoxycholic Acid_0_25")
+centroid_2 <- centroid %>%
+  filter(BILE_ACID_DETAILED == "Chenodeoxycholic Acid_0_25" | BILE_ACID_DETAILED == "Chenodeoxycholic Acid_0_5")
+
+# Plotting!!
+#pdf("Cheno_pcoa_arrow_F.pdf", width = 12)
+ggplot() + # Create ggplot
+   geom_point(aes(x=centroid$axis1, y= centroid$axis2, ## Plot the centroid with point with axis 1 and axis 2 as x and y
+                  color = centroid$SIC, shape = centroid$BILE_ACID_DETAILED), # Set color and shape for each centroid
+              size = 3, show.legend = TRUE) + # Change size and show it in the legend
+  geom_line(aes(x=centroid_1$axis1, y= centroid_1$axis2,  ## Plot line from ctrl centroid to first treatment centroid 
+                  color = centroid_1$SIC, group = centroid_1$SIC),
+              arrow = arrow(angle = 10, ends = "first", length = unit(0.1, "inches"), type="closed")) +
+  geom_line(aes(x=centroid_2$axis1, y= centroid_2$axis2,  ## Plot line from first treatment centroid to second treatment centroid
+                  color = centroid_2$SIC, group = centroid_2$SIC), 
+            arrow = arrow(angle = 10, ends = "first", length = unit(0.1, "inches"),type="closed")) +
+  geom_text(aes(x=centroid$axis1, y= centroid$axis2, ## Add the N and U inside the centroid
+                  label = centroid$SNU),
+            colour = "white", size = 2) +
+  scale_color_manual(values = pal_SIC, name = "SIC") + # Change the color to pal_SIC defined previously
+  scale_shape_manual(limits = c("CTRL", "Chenodeoxycholic Acid_0_25", "Chenodeoxycholic Acid_0_5"),
+                     values=c(15:17), name = "Bile Acid") + # Set the shapes manually
+  geom_segment(aes(x = 0, y = 0, xend = df_envfit$Axis.1*0.5,yend = df_envfit$Axis.2*0.5), ## Adding the arrow !
+            arrow = arrow(length = unit(0.2, "cm")),color="#808080",alpha=0.5) +
+  geom_text(aes(df_envfit$Axis.1*0.52, df_envfit$Axis.2*0.52, label = df_envfit$species_names, fontface=3), ## Adding the tax name at the end of the arrow
+            color="#303030",alpha=0.5, size=2) +
+  ggtitle("") +
+  xlab(labs[1]) + ## Adding the labels
+  ylab(labs[2]) +
+  theme_bw()
+
+```
+
