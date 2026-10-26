@@ -6,34 +6,45 @@ DOI: https://doi.org/10.64898/2026.05.04.722639
 Datasets:
 -
 16s rRNA gene amplicon sequencing data of the Afribtiota are available on ENA under project number: PRJEB48119 
+
 16S rRNA gene amplicon sequencing data of the stool-derived in vitro communities are available on ENA under project number: PRJNA1468128
 
 Workflow:
 - 
 Data cleaning and DADA2
 -
-Demultiplexed raw 16S rRNA gene amplicon sequencing data were processed using the DADA2 pipeline using scrips: 
+Demultiplexed raw 16S rRNA gene amplicon sequencing data were processed using the DADA2 pipeline using scrips:
+
 The resulting ASVs and taxonomy tables, as well as the metadata associated to these two datasets are available as supplementary tables:
+
   Afribiota data: Supplementary tables S1-S3
+
   Stool-derived in vitro community: Supplementary table S11-S13
+  
   Stool samples used to produce SICs: Supplementary table S8-S9 
+  
 The bile acid abundance per samples is included in the metadata table in Supplementary Table S3.
 
 Analysis
 -
 Analysis of the bile acid profiles :
+
   Analysis script: BileAcidBatchEffects.Rmd, BileAcidCode_CleanedCombined.Rmd
 
 Analysis of the microbiome profiles from the Afribiota study in correlation with the bile acid profiles:
+
   Analysis script: BA_Afribiota_ms.Rmd
 
 Analysis of the stool-derived in vitro communities (SICs) with additional bile acids: 
+
   Analysis script: BA_SIC_ms.Rmd
 
 Analysis of the bacterial isolates exposed to bile acids:
+
   Analysis script: BA_Isolates_ms.Rmd
 
 Metabolomic analysis:
+
   Analysis scripts: 1_metabolomic_analysis_parent_data.R, 2_metabolomic_analysis_metabolit_data.R, 3_main_figures.R
   
 
