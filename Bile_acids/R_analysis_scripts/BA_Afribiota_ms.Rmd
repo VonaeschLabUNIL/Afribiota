@@ -16,6 +16,7 @@ knitr::opts_chunk$set(echo = TRUE)
 Load libraries
 ```{r, warning=FALSE}
 library(phyloseq)
+library(readxl)
 library(dplyr)
 library(tidyr)
 #library(RColorBrewer)
@@ -29,15 +30,15 @@ library(microbiomeMarker)
 ```
 Load tables and create phyloseq
 ```{r}
-# Taxonomy table
+# Taxonomy table (supplementary table S1)
 tax <- as.matrix(read.table("/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/Afribiota_tax_table.csv",
                   header = TRUE, sep = ",", row.names = 1))
 taxonomy <- tax_table(tax)
-# Abundance table
+# Abundance table (supplementary table S2)
 abun <- as.matrix(read.table("/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/Afribiota_abundance_table.csv",
                    header = TRUE, sep = ",", row.names = 1, check.names = FALSE))
 abundance <- otu_table(abun, taxa_are_rows = TRUE)
-# Metadata table
+# Metadata table (supplementary table S3)
 md <- read.table("/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/Afribiota_metadata.csv",
                  header = TRUE, sep = ",", row.names = 1)
 metadata <- sample_data(md)
@@ -48,7 +49,7 @@ physeq = merge_phyloseq(metadata, physeq)
 # Relative abundance
 physeq_ra <- transform_sample_counts(physeq, function(x) 100*x/sum(x))
 
-# Dataframe for correlation
+# Dataframe for correlation (supplementary table S16)
 asv_acid_df <- read.table("/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/Afribiota_correlation_df.csv",
                  header = TRUE, sep = ",", row.names = 1)
 # Madagascar
