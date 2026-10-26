@@ -60,7 +60,7 @@ asv_acid_df_mad <- read.table("/Users/admin/Documents/VLab_projects/02_Side_proj
 asv_acid_df_car <- read.table("/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/Afribiota_CAR_correlation_df.csv",
                  header = TRUE, sep = ",", row.names = 1)
 
-# Dataframe Upper/Lower quantile for lithoderivative
+# Dataframe Upper/Lower quantile for lithoderivative  (supplementary table S17)
 df_upperlower_ld <- read.table("/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/MS_data_fig_SY/Afribiota_lithoderivatives_quantile.csv",
                  header = TRUE, sep = ",")
 rownames(df_upperlower_ld) <- df_upperlower_ld$id
