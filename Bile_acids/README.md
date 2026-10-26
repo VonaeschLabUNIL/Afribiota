@@ -17,11 +17,11 @@ Demultiplexed raw 16S rRNA gene amplicon sequencing data were processed using th
 
 The resulting ASVs and taxonomy tables, as well as the metadata associated to these two datasets are available as supplementary tables:
 
-  Afribiota data: Supplementary tables S1-S3
+  > Afribiota data: Supplementary tables S1-S3
 
-  Stool-derived in vitro community: Supplementary table S11-S13
+  > Stool-derived in vitro community: Supplementary table S11-S13
   
-  Stool samples used to produce SICs: Supplementary table S8-S9 
+  > Stool samples used to produce SICs: Supplementary table S8-S9 
   
 The bile acid abundance per samples is included in the metadata table in Supplementary Table S3.
 
