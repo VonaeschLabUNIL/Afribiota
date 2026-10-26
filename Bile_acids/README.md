@@ -14,9 +14,10 @@ Workflow:
 - 
 ## Data cleaning and DADA2
 
-Demultiplexed raw 16S rRNA gene amplicon sequencing data were processed using the DADA2 pipeline using scrips:
+Demultiplexed raw 16S rRNA gene amplicon sequencing data were processed using the DADA2 pipeline. Parameters and database versions are described in the method section.
 
-The resulting ASVs and taxonomy tables, as well as the metadata associated to these two datasets are available as supplementary tables:
+
+The resulting ASVs and taxonomy tables, as well as the metadata associated to these datasets are available as supplementary tables:
 
   > Afribiota data: Supplementary tables S1-S3
 
@@ -30,23 +31,23 @@ The bile acid abundance per samples is included in the metadata table in Supplem
 
 Analysis of the bile acid profiles :
 
-  > Analysis script: BileAcidBatchEffects.Rmd, BileAcidCode_CleanedCombined.Rmd
+  > Analysis script: *BileAcidBatchEffects.Rmd*, *BileAcidCode_CleanedCombined.Rmd*
 
 Analysis of the microbiome profiles from the Afribiota study in correlation with the bile acid profiles:
 
-  > Analysis script: BA_Afribiota_ms.Rmd
+  > Analysis script: *BA_Afribiota_ms.Rmd*
 
 Analysis of the stool-derived in vitro communities (SICs) with additional bile acids: 
 
-  > Analysis script: BA_SIC_ms.Rmd
+  > Analysis script: *BA_SIC_ms.Rmd*
 
 Analysis of the bacterial isolates exposed to bile acids:
 
-  > Analysis script: BA_Isolates_ms.Rmd
+  > Analysis script: *BA_Isolates_ms.Rmd*
 
 Metabolomic analysis:
 
-  > Analysis scripts: 1_metabolomic_analysis_parent_data.R, 2_metabolomic_analysis_metabolit_data.R, 3_main_figures.R
+  > Analysis scripts: *1_metabolomic_analysis_parent_data.R*, *2_metabolomic_analysis_metabolit_data.R*, *3_main_figures.R*
   
 
 
