@@ -16,9 +16,7 @@ Workflow:
 
 Demultiplexed raw 16S rRNA gene amplicon sequencing data were processed using the DADA2 pipeline. Parameters and database versions are described in the method section.
 
-The fecal 16S rRNA gene amplicon sequencing raw data from the Afribiota project was previously processed using the script: *Afribiota/Dada2_16SPNASVonaeschetal2022.R*
-
-DOI: https://doi.org/10.1073/pnas.220958911 
+The fecal 16S rRNA gene amplicon sequencing raw data from the Afribiota project was previously processed using the script: *Afribiota/Dada2_16SPNASVonaeschetal2022.R* (DOI: https://doi.org/10.1073/pnas.220958911 )
 
 The resulting ASVs and taxonomy tables, as well as the metadata associated to these datasets are available as supplementary tables:
 
