@@ -41,7 +41,7 @@ rownames(tax) <- tax$ASVs
 tax <- as.matrix(tax)
 taxonomy <- tax_table(tax)
 # Abundance table from the Afribiota project - Supplementary Data S2
-abun <- read_excel("../Supplementary_Data/Data_file_S2.xlsx", col_names = TRUE)
+abun <- read_excel("../Supplementary_Data/Supplementary_Data_S2.xlsx", col_names = TRUE)
 abun <- as.data.frame(abun)
 rownames(abun) <- abun$ENA_samplename
 abun <- abun %>% select(!c(ENA_samplename, ENA_samplename_fastq))
@@ -49,7 +49,7 @@ abun <- as.matrix(abun)
 storage.mode(abun) <- "numeric"
 abundance <- otu_table(abun, taxa_are_rows = FALSE)
 # Metadata table
-md <- read_excel("../Supplementary_Data/Data_file_S3.xlsx", col_names = TRUE)
+md <- read_excel("../Supplementary_Data/Supplementary_Data_S3.xlsx", col_names = TRUE)
 md <- as.data.frame(md)
 rownames(md) <- md$ENA_samplename
 metadata <- sample_data(md)
@@ -90,7 +90,7 @@ env.fit_BA <- envfit(vectorPCOA, META_envfit[,18:101], perm = 999)
 envfit_tab_BA <- cbind(as.data.frame(env.fit_BA$vectors$r, decreasing = TRUE), as.data.frame(env.fit_BA$vectors$pvals, decreasing = TRUE))
 colnames(envfit_tab_BA)[1] <- "EnvFit Correlation Coefficient Bile Acids"
 colnames(envfit_tab_BA)[2] <- "EnvFit pvalues Bile Acids"
-write.csv(envfit_tab_BA, "../Source_data/Data_file_S15.1.xlsx", row.names = TRUE)
+write.csv(envfit_tab_BA, "../Source_data/Supplementary_Data_S15.1.xlsx", row.names = TRUE)
 
 # EnvFit on taxa
 ps_envfit <- tax_glom(ps_pcoa, "Genus")
@@ -106,7 +106,7 @@ env.fit_TAX <- envfit(vectorPCOA, otu_envfit, perm = 999)
 envfit_tab_TAX <- cbind(as.data.frame(env.fit_TAX$vectors$r, decreasing = TRUE), as.data.frame(env.fit_TAX$vectors$pvals, decreasing = TRUE))
 colnames(envfit_tab_TAX)[1] <- "EnvFit Correlation Coefficient Taxa"
 colnames(envfit_tab_TAX)[2] <- "EnvFit pvalues Taxa"
-write.csv(envfit_tab_TAX, "../Source_data/Data_file_S15.2.xlsx", row.names = TRUE)
+write.csv(envfit_tab_TAX, "../Source_data/Supplementary_Data_S15.2.xlsx", row.names = TRUE)
 
 # Dataframe of envfit on bile acids
 df_envfit_BA <- scores(env.fit_BA, display=c("vectors"))
@@ -187,7 +187,7 @@ env.fit_oth$factors$pvals <= 0.05
 envfit_tab_oth <- cbind(as.data.frame(env.fit_oth$factors$r, decreasing = TRUE), as.data.frame(env.fit_oth$factors$pvals, decreasing = TRUE))
 colnames(envfit_tab_oth)[1] <- "EnvFit Correlation Coefficient Other Variables"
 colnames(envfit_tab_oth)[2] <- "EnvFit pvalues Other Variables"
-write.csv(envfit_tab_oth, "../Source_data/Data_file_S15.3.xlsx", row.names = TRUE)
+write.csv(envfit_tab_oth, "../Source_data/Supplementary_Data_S15.3.xlsx", row.names = TRUE)
 ```
 # Fig 4
 Correlation of bile acid levels with bacterial genera in the feces
@@ -233,7 +233,7 @@ corr_df$p_value_adjusted <- p.adjust(corr_df$p_val, method = "BH")
 # Adding taxonomic information for ASVs
 corr_df <- merge(corr_df, tax, by.x = "ASVs", by.y = "ASVs", all.x = TRUE)
 # Saving correlation results - Supplementary Data S16
-#write_xlsx(corr_df, "../Data_file_S16.xlsx", row.names = FALSE)
+#write_xlsx(corr_df, "../Supplementary_Data_S16.xlsx", row.names = FALSE)
 ```
 Linear model
 ```{r}
@@ -416,7 +416,7 @@ colnames(prevdf_ld_sign)[1:13] <- c("Chi test pvalue (Bonferroni-adjusted)",
                                     "Prevalence % low lithoderivatives",
                                     "Mean abundance low lithoderivatives")
 prevdf_ld_sign <- prevdf_ld_sign[, colnames(prevdf_ld_sign) != "Species"]
-#write_xlsx(prevdf_ld_sign, "../Supplementary_Data/Data_file_S17.xlsx", row.names = TRUE)
+#write_xlsx(prevdf_ld_sign, "../Supplementary_Data/Supplementary_Data_S17.xlsx", row.names = TRUE)
 ```
 ## Fig 4: C-H: Correlation plots
 ```{r}
