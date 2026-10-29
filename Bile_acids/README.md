@@ -38,7 +38,7 @@ Analysis of the bile acid profiles :
 
 Analysis of the microbiome profiles from the Afribiota study in correlation with the bile acid profiles:
 
-  > Analysis script: *BA_Afribiota_ms.Rmd*
+  > Analysis script: *A_BA_Afribiota.Rmd*
 
 Analysis of the stool-derived in vitro communities (SICs) with additional bile acids: 
 
