@@ -22,13 +22,13 @@ The SICs raw data were processed in DADA2 using the script: *DADA2_SICs.Rmd*
 
 The resulting ASVs and taxonomy tables, as well as the metadata associated to these datasets are available as supplementary tables:
 
-  > Afribiota data: Supplementary tables S1-S3
+  > Afribiota data: Supplementary Data S1-S3
 
-  > Stool-derived in vitro community: Supplementary table S11-S13
+  > Stool-derived in vitro community: Supplementary Data S11-S13
   
-  > Stool samples used to produce SICs: Supplementary table S8-S9 
+  > Stool samples used to produce SICs: Supplementary Data S8-S9 
   
-The bile acid abundance per samples is included in the metadata table in Supplementary Table S3.
+The bile acid abundance per samples is included in the metadata table in Supplementary Data S3.
 
 ## Analysis
 
