@@ -1,0 +1,298 @@
+---
+title: "Bile acids - Isolates analysis"
+author: "Simon Yersin"
+date: "2025-02-12"
+output: html_document
+---
+
+This RMarkDown file present the code used to produce the figures and results tables included in the manuscript for the bile acids - in vitro growth of representative strains.
+
+The imported tables are in their raw forms. Table manipulation is done to preoduce the final Supplementary Data included in the publication.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Loading library
+```{r}
+library(stringr)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(readr)
+library(ggpubr)
+library(forcats)
+```
+
+# Monocultures
+Table manipulation (raw data not provided)
+```{r}
+bile_acids <- read_tsv(paste0("../Tables/summary_bile_acids.tsv"))
+
+order_species <- bile_acids %>%  group_by(name) %>% summarize(sum = sum(hit)) %>% arrange(desc(sum))
+order_species <- as.vector(order_species$name)
+bile_acids <- bile_acids %>% mutate(name=factor(name, levels = order_species))
+
+bile_acids <- bile_acids %>% mutate(category_drug_2=factor(category_drug_2, levels=c('7-keto Lithocholic acid', 'Deoxycholic acid', 'Lithocholic acid', 'Lithoderivatives', 'Hyodeoxycholic acid', 'Dehydrolithocholic acid','NA')))
+bile_acids <- bile_acids %>% mutate(category_drug=factor(category_drug, levels=c('primary', 'conjugated primary', 'secondary', 'conjugated secondary', 'other')))
+```
+
+## Fig 5B
+```{r}
+hit_per_category <- bile_acids %>%  group_by(category, category_drug) %>% summarize(sum = sum(hit)) %>% arrange(desc(sum))
+hit_per_category <- bile_acids %>%  group_by(category, category_drug) %>% count(hit) 
+hit_per_category <- hit_per_category %>%  spread(hit, n)
+names(hit_per_category)[names(hit_per_category)=="TRUE"] <- "nr_hits"
+names(hit_per_category)[names(hit_per_category)=="FALSE"] <- "nr_none_hits"
+
+hit_per_category <- hit_per_category %>% mutate(all = nr_hits +  nr_none_hits)
+hit_per_category <- hit_per_category %>% mutate(percent_hits = nr_hits/all*100)
+hit_per_category <- hit_per_category %>% mutate(label = paste0(round(percent_hits,1), '% (', nr_hits, '/', all, ')'))
+
+fig5B <- ggplot(hit_per_category, aes(x=fct_rev(category_drug), y=percent_hits, fill=fct_rev(category))) +
+  geom_bar(position="dodge", stat="identity") +
+  scale_fill_manual(values=c("#fc8d59","#91cf60"))+
+  geom_text( aes(x=fct_rev(category_drug), y=45, label=label, group=fct_rev(category)), position = position_dodge(width = .9),size = 3) +
+  theme_minimal()+
+  theme(axis.text.x = element_text(size = 14),  axis.text.y = element_text(size = 14), legend.title = element_blank(),  axis.title.x = element_blank(),  axis.title.y = element_blank())+
+  coord_flip() +
+  ggtitle('Inhibitory effect of bile acids')
+
+pdf("../Figure_panels/Figure5B.pdf", width = 8, height = 4)
+fig5B
+dev.off()
+
+write.csv2(hit_per_category, "../Source_data/Figure5B.csv")
+```
+
+## Fig 5C
+```{r}
+hit_per_category2 <- bile_acids %>%  group_by(category, category_drug_2) %>% count(hit) 
+hit_per_category2 <- hit_per_category2 %>%  spread(hit, n)
+names(hit_per_category2)[names(hit_per_category2)=="TRUE"] <- "nr_hits"
+names(hit_per_category2)[names(hit_per_category2)=="FALSE"] <- "nr_none_hits"
+
+hit_per_category2 <- hit_per_category2 %>% mutate(all = nr_hits +  nr_none_hits)
+hit_per_category2 <- hit_per_category2 %>% mutate(percent_hits = nr_hits/all*100)
+hit_per_category2 <- hit_per_category2 %>% mutate(label = paste0(round(percent_hits,1), '% (', nr_hits, '/', all, ')'))
+
+fig5C <-  ggplot(filter(bile_acids, category_drug_2 != 'NA'), aes(x=fct_rev(category_drug_2), y=AUC, fill=fct_rev(Lachnospiraceae))) + 
+  geom_boxplot(position=position_dodge(1)) +
+  theme_minimal()+
+  coord_flip() +
+  scale_fill_manual(values=c("#91cf60","#fc8d59"))+
+  theme(axis.text.x = element_text(size = 14),  axis.text.y = element_text(size = 14), legend.title = element_blank(),  axis.title.x = element_blank(),  axis.title.y = element_blank())
+
+pdf("../Figure_panels/Figure5C.pdf", width = 8, height = 4)
+fig5C
+dev.off()
+
+write.csv2(hit_per_category2, "../Source_data/Figure5C.csv")
+```
+
+## Fig 5D
+```{r}
+fig5D <- ggplot(bile_acids, aes(x = name, y = drug_name_3)) +
+  geom_tile(aes(fill = AUC)) +
+  theme_bw() +
+  scale_fill_gradient2(low = "#fc8d59",mid = "#ffffbf",high = "#91cf60",midpoint = 1,space = "Lab",na.value = "grey50")+
+  theme(strip.background = element_blank(),axis.title.x=element_blank(), axis.title.y=element_blank(),axis.text.y= element_text(size=6), axis.text.x = element_text(angle = 90, vjust=0.5, hjust=1))+
+  facet_grid(category_drug~category, scales='free',space = 'free')
+
+pdf("../Figure_panels/Figure5D.pdf", width = 12, height = 8)
+fig5D
+dev.off()
+
+source_data_5D <- bile_acids %>%
+  select(name, drug_name_3, AUC, category_drug, category)
+
+write.csv2(source_data_5D, "../Source_data/Figure5D.csv")
+```
+
+Table manipulation (raw data not provided)
+Resulting to Supplementary Data S5
+```{r}
+isolates <- as.data.frame(read.table("../Tables/summary_bile_acids.tsv",
+                            sep = '\t', header = TRUE))
+
+md <- isolates
+# Rename columns
+colnames(md)[9] <- "Species_name"
+colnames(md)[15] <- "Concentrations"
+colnames(md)[16] <- "Bile_acids"
+colnames(md)[19] <- "Bile_acids_Concentration"
+# Clean
+md[,19] <- str_remove_all(md[,19], "_ ")
+
+
+# Filter for isolates of interest:
+md <- md %>% filter(Species_name %in% c("Coprococcus comes", "Roseburia intestinalis", "Shigella flexneri", "Fusobacterium mortiferum",
+                                    "Campylobacter jejuni jejuni","Lactobacillus salivarius", "Lactobacillus ruminis",
+                                    "Streptococcus salivarius", "Granulicatella elegans"))
+md <- md %>% filter(Bile_acids %in% c("Glycochenodeoxycholic acid", "Taurochenodeoxycholic acid","Chenodeoxycholic acid",
+                                      "Glycolithocholic acid", "Taurolithocholic acid","Lithocholic acid"))
+
+md.levels <- c("Glycolithocholic acid 0.25", "Taurolithocholic acid 0.25","Lithocholic acid 0.5", "Lithocholic acid 0.25",
+               "Glycochenodeoxycholic acid 1","Glycochenodeoxycholic acid 0.5","Glycochenodeoxycholic acid 0.25","Taurochenodeoxycholic acid 1",
+               "Taurochenodeoxycholic acid 0.5","Taurochenodeoxycholic acid 0.25","Chenodeoxycholic acid 1","Chenodeoxycholic acid 0.5",
+               "Chenodeoxycholic acid 0.25")
+ 
+md_dataM <- data.frame(
+  Bile_acids_Concentration = md.levels,
+  Tacids_num = 1:length(md.levels))
+md <- dplyr::left_join(md, md_dataM, by= "Bile_acids_Concentration")
+
+# Rename based on new nomenclature
+md$Species_name[which(md$Species_name=="Coprococcus comes")] <- "Bariatricus comes"
+md$Species_name[which(md$Species_name=="Lactobacillus salivarius")] <- "Ligilactobacillus salivarius"
+md$Species_name[which(md$Species_name=="Lactobacillus ruminis")] <- "Ligilactobacillus ruminis"
+
+#write.csv(md, "../Supplementary_Data/Supplementary_Data_S5.csv", row.names = TRUE)
+```
+
+## Fig 5E
+```{r}
+fig5E <- ggplot(md, aes(x=Tacids_num, y=AUC, fill = case_when(
+                        AUC > 1.1  ~ "#BDD88B",AUC < 0.9  ~ "#E89367",TRUE~ "grey90"))) +
+  geom_col() + 
+  coord_flip() +
+  geom_hline(yintercept=1, alpha = 0.5, linewidth = 0.5) +
+  scale_fill_identity() + 
+  scale_x_continuous(breaks=1:length(md.levels), labels=md.levels) +
+  ggh4x::facet_grid2( ~ factor(Species_name, levels = c("Bariatricus comes", "Roseburia intestinalis", "Shigella flexneri", "Fusobacterium mortiferum",
+                                    "Campylobacter jejuni jejuni","Ligilactobacillus salivarius", "Ligilactobacillus ruminis",
+                                    "Streptococcus salivarius", "Granulicatella elegans"))) +
+  theme_bw(base_size = 10) + 
+  theme(text = element_text(family = "Helvetica"),
+    strip.text.x = element_text(size = 4, face = "italic", family = "sans"),
+        axis.text =  element_text(size = 10, family = "sans"),
+        axis.title.y = element_blank(),
+        axis.title.x = element_text(size = 10, family = "sans"),
+        panel.border = element_rect(colour = "lightgrey"),
+        strip.background = element_blank())
+  
+pdf("../Figure_panels/Figure5E.pdf", width = 11, height = 3 )
+fig5E
+dev.off()
+
+source_data_5E <- md %>%
+  select(drug, Species_name, Tacids_num, AUC)
+
+write.csv2(source_data_5E, "../Source_data/Figure5E.csv")
+```
+# Synthetic Communities
+From NA:
+Absolute abundance as mean_relAbundOD: relative abundance * OD value / number of bacterial species in the community
+Normalized mean_relAbundOD: norm value
+
+Table manipulation (original raw table not provided)
+Resulting to Supplementary Data S6
+```{r}
+communities <- as.data.frame(read.csv2("../Tables/combined_data_communities.csv",
+                                       sep = ","))
+# Bile acid treatment 
+unique(communities$Drug)
+# "Glycolithocholic Acid", "Taurolithocholic acid", "Lithocholic acid", "Glycochenodeoxycholate", "Taurochenodeoxycholic acid", "Chenodeoxycholic Acid"
+# "Unteated 1"                          "Unteated 2"                          "Unteated 3"
+mdc <- communities
+colnames(mdc)[2] <- "Bile_acid_abbrev"
+colnames(mdc)[6] <- "Concentrations"
+# Clean captial A
+mdc$Drug <- str_replace_all(mdc$Drug, "Acid", "acid")
+
+# Rename Glycochenodeoxycholate for Glycochenodeoxycholic acid
+mdc$Drug[which(mdc$Drug == "Glycochenodeoxycholate")] <- "Glycochenodeoxycholic acid"
+
+# Remove " µM" in concentrations
+mdc$Concentrations <- str_remove_all(mdc$Concentrations, " µM")
+
+mdc$Concentrations <- as.numeric(mdc$Concentrations)
+mdc$Concentrations <- mdc$Concentrations/1000
+mdc$Concentrations <- as.character(mdc$Concentrations)
+# Add column Bile acids 
+mdc <- mdc %>% mutate(Bile_acids_Concentration = str_c(mdc$Drug, " ", mdc$Concentrations))
+
+mdc_norm <- mdc %>% filter(Drug %in% c("Glycochenodeoxycholic acid", "Taurochenodeoxycholic acid","Chenodeoxycholic acid",
+                                      "Glycolithocholic acid", "Taurolithocholic acid","Lithocholic acid", "Unteated 1"))
+mdc_norm <- mdc_norm[,c(1,4,5,6,7,10)]
+
+# Mulitply rel abundance by 100
+mdc_norm$mean_Relabund <- as.numeric(mdc_norm$mean_Relabund)
+mdc_norm$mean_Relabund <- mdc_norm$mean_Relabund*100
+
+control_mdc <- mdc_norm %>%
+  filter(Drug == "Unteated 1") %>%
+  select(Species, Control_RelAbundance = mean_Relabund)
+
+mdc_norm <- mdc_norm %>%
+  filter(Drug != "Unteated 1") %>%  # Keep only treated data
+  left_join(control_mdc, by = "Species")  # Add control values
+
+mdc_norm <- mdc_norm %>%
+  mutate(RelAbun_Baseline = mean_Relabund - Control_RelAbundance)
+
+mdc_norm <- mdc_norm %>%
+  mutate(
+    # Apply log2 fold change transformation, adding a small constant to avoid log(0)
+    Log2FC = log2((mean_Relabund + 0.001014194) / (Control_RelAbundance + 0.001014194)))
+
+
+# Missing "Chenodeoxycholic acid 1"
+mdc.levels <- c("Glycolithocholic acid 0.25", "Taurolithocholic acid 0.25","Lithocholic acid 0.5", "Lithocholic acid 0.25",
+               "Glycochenodeoxycholic acid 1","Glycochenodeoxycholic acid 0.5","Glycochenodeoxycholic acid 0.25","Taurochenodeoxycholic acid 1",
+               "Taurochenodeoxycholic acid 0.5","Taurochenodeoxycholic acid 0.25","Chenodeoxycholic acid 0.5",
+               "Chenodeoxycholic acid 0.25")
+
+mdc_dataM <- data.frame(
+  Bile_acids_Concentration = mdc.levels,
+  Tacids_num = 1:length(mdc.levels))
+mdc_norm <- dplyr::left_join(mdc_norm, mdc_dataM, by= "Bile_acids_Concentration")
+unique(mdc_norm$Species)
+
+mdc_norm <- mdc_norm %>%
+  mutate(Species = gsub(" ", "\n", Species))
+
+#write.csv(mdc_norm, "../Supplementary_Data/Supplementary_Data_S6.csv", row.names = TRUE)
+```
+
+## Fig 5F
+```{r}
+fig5F <- ggplot(mdc_norm, aes(x=Tacids_num, y=Log2FC, 
+                              fill = case_when(RelAbun_Baseline > 0 ~ "#BDD88B",RelAbun_Baseline < 0  ~ "#E89367",TRUE~ "grey90"))) +
+  geom_col() +
+  coord_flip() +
+  geom_hline(yintercept=0, alpha = 0.5, linewidth = 0.5) +
+  scale_fill_identity() + 
+  scale_x_continuous(breaks=1:length(mdc.levels), labels=mdc.levels) +
+  ggh4x::facet_grid2( ~ factor(Species, levels = c("Agathobacter\nrectalis", "Bariatricus\ncomes", "Bacteroides\novatus",
+                                                   "Roseburia\nintestinalis",
+                                                        "Anaerostipes\ncaccae", "Anaerobutyricum\nhallii",
+                                                        "Shigella\nflexneri","Fusobacterium\nnucleatum","Fusobacterium\nmortiferum",
+                                                   "Fusobacterium\nperiodonticum",
+                                                        "Limosilactobacillus\nmucosae", "Ligilactobacillus\nsalivarius",
+                                                   "Ligilactobacillus\nruminis",
+                                                        "Streptococcus\nparasanguinis",
+                                                   "Streptococcus\nsalivarius","Granulicatella\nadiacens",  
+                                                         "Pseudoleptotrichia\ngoodfellowii",
+                                                        "Porphyromonas\nasaccharolytica", "Prevotella\nmelaninogenica",
+                                                   "Veillonella\natypica"))) +
+  theme_bw(base_size = 12) + 
+  theme(text = element_text(family = "Helvetica"),
+        strip.text.x = element_text(size = 12, face = "italic", family = "sans"),
+        axis.text =  element_text(size = 12, family = "sans"),
+        axis.title.y = element_blank(),
+        axis.title.x = element_text(size = 12, family = "sans"),
+        panel.border = element_rect(colour = "lightgrey"),
+        strip.background = element_blank())
+
+
+pdf("../Figure_panels/Figure5F.pdf", width = 16, height = 4 )
+fig5F
+dev.off()
+
+source_data_5F <- mdc_norm %>%
+  select(Drug, Species, Tacids_num, Log2FC, RelAbun_Baseline)
+
+write.csv2(source_data_5F, "../Source_data/Figure5F.csv")
+```
+
