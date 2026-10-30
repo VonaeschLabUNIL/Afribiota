@@ -40,13 +40,15 @@ Analysis of the microbiome profiles from the Afribiota study in correlation with
 
   > Analysis script: *A_BA_Afribiota.Rmd*
 
+Analysis of the bacterial isolates (monocultures or synthetic communities) exposed to bile acids:
+
+  > Analysis script: *B_BA_Isolates_ms.Rmd*
+
 Analysis of the stool-derived in vitro communities (SICs) with additional bile acids: 
 
   > Analysis script: *BA_SIC_ms.Rmd*
 
-Analysis of the bacterial isolates exposed to bile acids:
 
-  > Analysis script: *BA_Isolates_ms.Rmd*
 
 Metabolomic analysis:
 
