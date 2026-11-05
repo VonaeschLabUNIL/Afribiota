@@ -34,7 +34,7 @@ The bile acid abundance per samples is included in the metadata table in Supplem
 
 Analysis of the bile acid profiles and clinical factors :
 
-  > Analysis script: *BA_BatchEffects.Rmd*, *A_BA_ClinicalFactors.Rmd*
+  > Analysis script: *A1_BA_BatchEffects.Rmd*, *A2_BA_ClinicalFactors.Rmd*
 
 Analysis of the microbiome profiles from the Afribiota study in correlation with the bile acid profiles:
 
@@ -51,7 +51,7 @@ Analysis of the stool-derived in vitro communities (SICs) with additional bile a
 
 Metabolomic analysis:
 
-  > Analysis scripts: *1_metabolomic_analysis_parent_data.R*, *2_metabolomic_analysis_metabolit_data.R*, *3_main_figures.R*
+  > Analysis scripts: *E1_metabolomic_analysis_parent_data.R*, *E2_metabolomic_analysis_metabolit_data.R*, *E3_main_figures.R*
   
 
 
