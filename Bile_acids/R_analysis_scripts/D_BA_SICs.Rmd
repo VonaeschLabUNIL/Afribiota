@@ -1,0 +1,1895 @@
+---
+title: "Bile acids - Stool-derived in vitro communities Analysis"
+author: "Simon Yersin"
+date: "2025-02-05"
+output: html_document
+---
+
+This RMarkDown file present the code used to produce the figures and results tables included in the manuscript for the bile acids - stool-derived in vitro communities data.
+
+The tables are imported directly in their final published form here.
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Loading libraries
+```{r, warning=FALSE, message=FALSE}
+library(ggplot2)
+library(phyloseq)
+library(gridExtra)
+library(stringr)
+library(RColorBrewer)
+library(dplyr)
+library(microbiomeMarker)
+library(ggh4x)
+library(MicEco)
+library(vegan)
+library(ape)
+library(glue)
+#library(ANCOM)
+```
+
+# Loading tables
+```{r}
+# SIC
+# Taxonomy table
+tax <- read_excel("../Supplementary_Data/Supplementary_Data_S12.xlsx", col_names = TRUE)
+tax <- as.data.frame(tax)
+rownames(tax) <- tax$ASVs
+tax <- tax[,-8]
+tax <- as.matrix(tax)
+taxonomy <- tax_table(tax)
+
+# Abundance table
+abun <- read_excel("../Supplementary_Data/Supplementary_Data_S11.xlsx", col_names = TRUE)
+abun <- as.data.frame(abun)
+rownames(abun) <- abun$ASVs
+abun <- abun[,-1]
+abun <- as.matrix(abun)
+abundance <- otu_table(abun, taxa_are_rows = TRUE)
+
+# Metadata table
+md <- read_excel("../Supplementary_Data/Supplementary_Data_S13.xlsx", col_names = TRUE)
+md <- as.data.frame(md)
+rownames(md) <- md$fastqID
+metadata <- sample_data(md)
+
+# Orignial fecal samples
+# Taxonomy table
+tax_os <- read_excel("../Supplementary_Data/Supplementary_Data_S9.xlsx", col_names = TRUE)
+tax_os <- as.data.frame(tax_os)
+rownames(tax_os) <- tax_os$ASVs
+tax_os <- tax_os[,-8]
+tax_os <- as.matrix(tax_os)
+taxonomy_os <- tax_table(tax_os)
+
+# Abundance table
+abun_os <- read_excel("../Supplementary_Data/Supplementary_Data_S8.xlsx", col_names = TRUE)
+abun_os <- as.data.frame(abun_os)
+rownames(abun_os) <- abun_os$ASVs
+abun_os <- abun_os[,-1]
+abun_os <- as.matrix(abun_os)
+abundance_os <- otu_table(abun_os, taxa_are_rows = TRUE)
+
+# Metadata table
+md_os <- read_excel("../Supplementary_Data/Supplementary_Data_S10.xlsx", col_names = TRUE)
+md_os <- as.data.frame(md_os)
+rownames(md_os) <- md_os$fastqID
+metadata_os <- sample_data(md_os)
+```
+
+Phyloseq object
+```{r}
+physeq= phyloseq(abundance, taxonomy)
+physeq = merge_phyloseq(metadata, physeq)
+physeq_ra <- transform_sample_counts(physeq, function(x) 100*x/sum(x))
+
+physeqOS= phyloseq(abundance_os, taxonomy_os)
+physeqOS = merge_phyloseq(metadata_os, physeqOS)
+physeqOS_ra <- transform_sample_counts(physeqOS, function(x) 100*x/sum(x))
+```
+
+Levels
+```{r}
+# Lithocholic acid
+Lc_acidM.levels <- c("Control", "Lithocholic acid 0.25", "Lithocholic acid 0.5")
+Lc_dataM <- data.frame(
+  Bile_acids_Concentration = Lc_acidM.levels,
+  Tacids_num = 1:length(Lc_acidM.levels))
+
+# Chenodeoxycholic acid
+Cdc_acidM.levels <- c("Control", "Chenodeoxycholic acid 0.25", "Chenodeoxycholic acid 0.5")
+Cdc_dataM <- data.frame(
+  Bile_acids_Concentration = Cdc_acidM.levels,
+  Tacids_num = 1:length(Cdc_acidM.levels))
+
+# Taurochenodeoxycholic acid
+Tcdc_acidM.levels <- c("Control", "Taurochenodeoxycholic acid 0.25", "Taurochenodeoxycholic acid 0.5", "Taurochenodeoxycholic acid 1")
+Tcdc_dataM <- data.frame(
+  Bile_acids_Concentration = Tcdc_acidM.levels,
+  Tacids_num = 1:length(Tcdc_acidM.levels))
+
+# Taurolithocholic acid
+Tlc_acidM.levels <- c("Control", "Taurolithocholic acid 0.25")
+Tlc_dataM <- data.frame(
+  Bile_acids_Concentration = Tlc_acidM.levels,
+  Tacids_num = 1:length(Tlc_acidM.levels))
+```
+
+phyloseq family split by bile acids
+```{r}
+physeq_fam <- tax_glom(physeq_ra, "Family")
+
+# Subset phyloseq for each bile acid with control
+# Lithocholic acid
+ps_Lc_fam <- subset_samples(physeq_fam, Bile_acids =="Control" | Bile_acids == "Lithocholic acid")
+
+# Taurolithocholic acid
+ps_Tlc_fam <- subset_samples(physeq_fam, Bile_acids =="Control" | Bile_acids == "Taurolithocholic acid")
+
+# Chenodeoxycholic acid
+ps_Cdc_fam <- subset_samples(physeq_fam, Bile_acids =="Control" | Bile_acids == "Chenodeoxycholic acid")
+
+# Taurochenodeoxycholic acid
+ps_Tcdc_fam <- subset_samples(physeq_fam, Bile_acids =="Control" | Bile_acids == "Taurochenodeoxycholic acid")
+```
+
+Color palette
+```{r}
+palbrew_info <- brewer.pal.info[brewer.pal.info$category == "qual", ] 
+palbrew_all <- unlist(mapply(brewer.pal,palbrew_info$maxcolors,rownames(palbrew_info)))
+pal_SIC <- palbrew_all[17:27]
+pal_21 <- palbrew_all[c(46,63,47,6,48,14,72,66,67,51,69,53,64,61,16,29,30,31,32,33,35)]
+pal_3 <- palbrew_all[c(15,20, 62)]
+```
+
+## Controls only phyloseq
+merged with original samples
+```{r}
+# Filtering for control SIC only
+ctrl_ps <- subset_samples(physeq_ra, Bile_acids =="Control")
+# Removing taxa with abundance 0
+ctrl_ps <- prune_taxa(taxa_sums(ctrl_ps)> 0, ctrl_ps)
+# Merging with phyloseq of original samples
+ps_ctrl <- merge_phyloseq(ctrl_ps, physeqOS_ra)
+# Removing unecessary metadata column
+sample_data(ps_ctrl) <- sample_data(ps_ctrl)[,-c(8:17)]
+```
+
+# Fig 7
+Lithocholic acid boost butyrate producers uin full fecal communities
+## Fig 7A
+BioRender figure showing the methodology
+
+## Fig 7B
+```{r}
+# Agglomerate at the genus level
+ctrl_ps_gen <- tax_glom(ps_ctrl, "Genus")
+# 197 genus: selecting top 20 most abundant for clearer figure
+Ctrlgen10 <- prune_taxa(names(sort(taxa_sums(ctrl_ps_gen), TRUE)[1:20]), ctrl_ps_gen)
+top_otuG <- otu_table(Ctrlgen10)
+toptaxaG <- tax_table(Ctrlgen10)
+Ctrlgen20 = phyloseq(top_otuG, toptaxaG)
+Ctrlgen20 = merge_phyloseq(sample_data(ctrl_ps_gen), Ctrlgen20) 
+# Grouping other genus (21 to 436)
+CtrlG_other <- prune_taxa(names(sort(taxa_sums(ctrl_ps_gen), TRUE)[c(21:197)]), ctrl_ps_gen)
+others_otu <- t(as.matrix(apply(otu_table(CtrlG_other), 2, sum)))
+rownames(others_otu) <- "Others genus"
+others_otu=otu_table(others_otu, taxa_are_rows = TRUE)
+other_taxG <- c("Others", "Others","Others","Others","Others","Others","Others")
+other_taxG <- as.matrix(other_taxG)
+rownames(other_taxG) <- colnames(tax_table(CtrlG_other))
+other_taxG <- t(other_taxG)
+rownames(other_taxG) <- "Others genus"
+other_taxG =  tax_table(other_taxG)
+others_CtrlG= phyloseq(others_otu,other_taxG)
+others_CtrlG = merge_phyloseq(sample_data(ctrl_ps_gen), others_CtrlG) 
+others_CtrlG
+# Regrouping phyloseq of top 20 and others
+ctrlG <- merge_phyloseq(Ctrlgen20, others_CtrlG)
+ctrlG_melt <- psmelt(ctrlG)
+# Function to replace label of the sample for Sample or SIC
+label_func <- function(x) {
+  labels <- rep("Sample", length(x))
+  labels[(length(x)/2 + 1):length(x)] <- "SIC"
+  return(labels)
+}
+
+# Rename to order first the sample then the SIC
+ctrlG_melt$Sample[which(ctrlG_melt$Type=="Sample")] <- str_replace(ctrlG_melt$Sample[which(ctrlG_melt$Type=="Sample")], "RFS", "ARFS")
+
+fig7b <- ctrlG_melt %>%
+  ggplot(aes_string(x = "Sample", y = "Abundance", fill = "Genus")) +
+  geom_bar(stat = "identity", position = "stack") + 
+  facet_grid(~SIC, scales = "free_x") +
+  scale_fill_manual(values = pal_21) +
+  scale_x_discrete(labels = label_func) + 
+  ylab("Relative abundance (%)") +
+  theme_bw() + 
+  theme(legend.position = "right",
+        text = element_text(family = "Helvetica"),
+        axis.title.x=element_blank(),
+        axis.text.x=element_text(size = 14, angle = 90, hjust = 1, family = "sans"),
+        axis.text.y=element_text(size = 14, family = "sans"),
+        axis.ticks.x=element_blank(),
+        legend.text = element_text(size = 14, face=3,family = "sans"), legend.title = element_text(family = "sans")) +
+  guides(fill=guide_legend(ncol=1))
+ 
+
+pdf("../Figure_panels/Figure7B.pdf", width = 11, height = 6)
+print(fig7b)
+dev.off()
+
+source_data_7B <- ctrlG_melt %>%
+  select(Sample, Abundance, Genus, SIC)
+
+write.csv2(source_data_7B, "../Source_data/Figure7B.csv")
+```
+
+## Fig 7C
+PCoA lithocholic acid
+```{r}
+OTU_litho = as(otu_table(ps_Lc_fam), "matrix")
+otu_litho <- as.data.frame(OTU_litho)
+TAX_litho = as(tax_table(ps_Lc_fam), "matrix")
+tax_litho <- as.data.frame(TAX_litho)
+META_litho = as(sample_data(ps_Lc_fam), "matrix")
+meta_litho <- as.data.frame(META_litho)
+meta_litho <- meta_litho %>%
+  mutate(SIC_NUT_STAT = str_c(SIC, "_", Nutritional_status))
+meta_litho <- meta_litho %>%
+  mutate(SIMPLE_NUTSTAT = "")
+meta_litho$SIMPLE_NUTSTAT[which(meta_litho$Nutritional_status=="stunted")] <- "S"
+meta_litho$SIMPLE_NUTSTAT[which(meta_litho$Nutritional_status=="non-stunted")] <- "N"
+tax_otu <-cbind(tax_litho, otu_litho)
+
+tax_otu$Name <- str_c(tax_otu$Kingdom, '_',tax_otu$Phylum, '_', tax_otu$Class, '_', tax_otu$Order, '_', tax_otu$Family)
+tax_otu[, 98] <- as.character(tax_otu[, 98])
+rownames(tax_otu) <- tax_otu[,98]
+tax_otu <- tax_otu[,-c(1:7,98)]
+tax_otu <- t(tax_otu)
+class(tax_otu) <- "numeric"
+tax_otu <- as.data.frame(tax_otu)
+dist <- vegdist(tax_otu[, 1:90],  method = "bray")
+PCOA <- pcoa(dist)
+vectorPCOA <- as.data.frame(PCOA$vectors[, 1:2])
+
+# Arrows and taxa name
+env.fit <- envfit(vectorPCOA, tax_otu[,1:90], perm = 999)
+#Warning: the standard deviation is zero
+env.fit.sig  <- as.data.frame(scores(env.fit, display = "vectors"))
+env.fit.vect <- as.list(env.fit$vectors)
+coordinates <- cbind(as.data.frame(env.fit.vect$arrows*sqrt(env.fit.vect$r)), as.data.frame(env.fit.vect$pvals))
+coordinates_sign <- subset(coordinates, as.data.frame(env.fit.vect$pvals) <= 0.05)
+coordinates_sign <- cbind(coordinates_sign, species = rownames(coordinates_sign))
+arr_pvals_coord <- coordinates_sign %>%
+  mutate(Coord = (Axis.1*Axis.1)+(Axis.2*Axis.2))
+arr_pvals_coord[,5] <- as.numeric(arr_pvals_coord[,5])
+df_envfit <- scores(env.fit,display=c("vectors"))
+df_envfit <- df_envfit*vegan:::ordiArrowMul(df_envfit)
+df_envfit <- as.data.frame(df_envfit)
+df_envfit$species <- rownames(df_envfit)
+df_envfit <- df_envfit %>% 
+  filter(species %in% coordinates_sign$species)
+arrows_names <- str_split_fixed(df_envfit$species, "_", 5)
+arrows_names <- as.data.frame(arrows_names)
+df_envfit <- df_envfit %>% 
+  mutate(species_names = arrows_names$V5)
+
+# Plotting
+ft.scores <- as.data.frame(vectorPCOA)
+ft.scores$fastqID <- rownames(tax_otu)
+which(rownames(meta_litho) != rownames(ft.scores))
+ft.scores$Bile_acids_Concentration <- meta_litho$Bile_acids_Concentration
+ft.scores$SIC <- meta_litho$SIC_NUT_STAT
+ft.scores$SNU <- meta_litho$SIMPLE_NUTSTAT
+ft.scores.d <- distinct(ft.scores)
+per_explained <- 100*PCOA$values$Relative_eig / sum(PCOA$values$Relative_eig)
+per_explained <- round(per_explained[1:2], digits = 1)
+labs <- c(glue("Axis1 [{per_explained[1]}%]"),
+          glue("Axis2 [{per_explained[2]}%]"))
+centroid <- ft.scores.d %>%
+  group_by(SIC, Bile_acids_Concentration, SNU) %>%
+  summarise(axis1 = mean(Axis.1),
+            axis2 = mean(Axis.2), .groups = "drop")
+centroid_1 <- centroid %>%
+  filter(Bile_acids_Concentration == "Control" | Bile_acids_Concentration == "Lithocholic acid 0.25")
+centroid_2 <- centroid %>%
+  filter(Bile_acids_Concentration == "Lithocholic acid 0.25" | Bile_acids_Concentration == "Lithocholic acid 0.5")
+```
+
+```{r}
+fig7c <- ggplot() +
+  geom_point(aes(x=centroid$axis1, y= centroid$axis2,color = centroid$SIC, shape = centroid$Bile_acids_Concentration), size = 3, show.legend = TRUE) +
+  geom_line(aes(x=centroid_1$axis1, y= centroid_1$axis2, color = centroid_1$SIC, group = centroid_1$SIC)) +
+  geom_line(aes(x=centroid_2$axis1, y= centroid_2$axis2,color = centroid_2$SIC, group = centroid_2$SIC)) +
+  geom_text(aes(x=centroid$axis1, y= centroid$axis2, label = centroid$SNU),colour = "white", size = 2) +
+  scale_color_manual(values = pal_SIC, name = "SIC", guide = "none") +
+  scale_shape_manual(limits = c("Control", "Lithocholic acid 0.25", "Lithocholic acid 0.5"), values=c(15:17), name = "") +
+  geom_segment(aes(x = 0, y = 0, xend = df_envfit$Axis.1*0.5,yend = df_envfit$Axis.2*0.5),
+            arrow = arrow(length = unit(0.2, "cm")),color="#808080",alpha=0.5) +
+  geom_text(aes(df_envfit$Axis.1*0.52, df_envfit$Axis.2*0.52, label = df_envfit$species_names, fontface=3), color="#303030", size=3) +
+  ggtitle("") +
+  xlab(labs[1]) +
+  ylab(labs[2]) +
+  theme_bw() + 
+  theme(text = element_text(family = "Helvetica"),
+        legend.position = "bottom", 
+        axis.title=element_text(size=13,family = "sans"), 
+        axis.text = element_text(size=13,family = "sans"),
+        legend.text = element_text(size=13,family = "sans"),
+        legend.title = element_text(size=13,family = "sans"))
+
+pdf("../Figure_panels/Figure7C.pdf", width = 9, height = 5)
+print(fig7c)
+dev.off()
+
+source_data_7C.1 <- rbind(centroid, centroid_1, centroid_2)
+write.csv2(source_data_7C.1, "../Source_data/Figure7C1.csv")
+
+write.csv2(df_envfit, "../Source_data/Figure7C2.csv")
+```
+
+## Fig 7 D
+Lefse lithocholic acid
+```{r}
+ps_lefse_Lc_025 <- subset_samples(ps_Lc_fam, Bile_acids =="Control" | Bile_acids_Concentration == "Lithocholic acid 0.25")
+lef_out_Lc_025 <- run_lefse(ps_lefse_Lc_025, wilcoxon_cutoff = 0.01, group = "Bile_acids_Concentration",
+                              taxa_rank = "Family", kw_cutoff = 0.05, norm = "CPM", multigrp_strat = TRUE, lda_cutoff = 2)
+
+fig7d1 <- plot_ef_bar(lef_out_Lc_025) +
+  theme(legend.position = "right", axis.title=element_text(size=8,family = "sans"), 
+        axis.text.y = element_text(size=8,face = 3, family = "sans"),
+        axis.text.x = element_text(size=8, family = "sans"),
+        legend.text = element_text(size=6,family = "sans"),
+        legend.direction = "vertical",
+        legend.title = element_text(size=6,family = "sans")) +
+  scale_fill_manual(values = c("#E87D72","#00BFC4"))
+
+ps_lefse_Lc_05 <- subset_samples(ps_Lc_fam, Bile_acids =="Control" | Bile_acids_Concentration == "Lithocholic acid 0.5")
+lef_out_Lc_05 <- run_lefse(ps_lefse_Lc_05, wilcoxon_cutoff = 0.01, group = "Bile_acids_Concentration",
+                              taxa_rank = "Family", kw_cutoff = 0.05, norm = "CPM", multigrp_strat = TRUE, lda_cutoff = 2)
+
+fig7d2 <- plot_ef_bar(lef_out_Lc_05) +
+  theme(legend.position = "right", axis.title=element_text(size=8,family = "sans"), 
+        axis.text.y = element_text(size=8,face = 3, family = "sans"),
+        axis.text.x = element_text(size=8, family = "sans"),
+        legend.text = element_text(size=6,family = "sans"),
+        legend.direction = "vertical",
+        legend.title = element_text(size=6,family = "sans")) +
+  scale_fill_manual(values = c("#E87D72","#00BFC4"))
+
+
+pdf("../Figure_panels/Figure7D.pdf", width = 5, height = 6 )
+grid.arrange(fig7d1, fig7d2, ncol = 1)
+dev.off()
+
+source_data_7D <- rbind(as.matrix(marker_table(lef_out_Lc_025)), as.matrix(marker_table(lef_out_Lc_05)))
+write.csv2(source_data_7D, "../Source_data/Figure7D.csv")
+```
+Stratified by stunting status (reviewer request)
+```{r}
+# Stunted
+ps_lefse_Lc_025_stunted <- subset_samples(ps_lefse_Lc_025, Nutritional_status == "stunted")
+lef_out_Lc_025_s <- run_lefse(ps_lefse_Lc_025_stunted, wilcoxon_cutoff = 0.01, group = "Bile_acids_Concentration",
+                              taxa_rank = "Family", kw_cutoff = 0.05, norm = "CPM", multigrp_strat = TRUE, lda_cutoff = 2)
+
+mt_Lc_025_s <- marker_table(lef_out_Lc_025_s)
+mt_Lc_025_s$padjustedBH <- p.adjust(mt_Lc_025_s$pvalue, method = "BH")
+mt_Lc_025_s$padjustedFDR <- p.adjust(mt_Lc_025_s$pvalue, method = "fdr")
+
+fig7d3 <- plot_ef_bar(lef_out_Lc_025_s) +
+  theme(legend.position = "right", axis.title=element_text(size=8,family = "sans"), 
+        axis.text.y = element_text(size=8,face = 3, family = "sans"),
+        axis.text.x = element_text(size=8, family = "sans"),
+        legend.text = element_text(size=6,family = "sans"),
+        legend.direction = "vertical",
+        legend.title = element_text(size=6,family = "sans")) +
+  scale_fill_manual(values = c("#E87D72","#00BFC4")) +
+  ggtitle("Stunted")
+
+# Non-stunted
+ps_lefse_Lc_025_ns <- subset_samples(ps_lefse_Lc_025, Nutritional_status == "non-stunted")
+lef_out_Lc_025_ns <- run_lefse(ps_lefse_Lc_025_ns, wilcoxon_cutoff = 0.01, group = "Bile_acids_Concentration",
+                              taxa_rank = "Family", kw_cutoff = 0.05, norm = "CPM", multigrp_strat = TRUE, lda_cutoff = 2)
+
+mt_Lc_025_ns <- marker_table(lef_out_Lc_025_ns)
+mt_Lc_025_ns$padjustedBH <- p.adjust(mt_Lc_025_ns$pvalue, method = "BH")
+mt_Lc_025_ns$padjustedFDR <- p.adjust(mt_Lc_025_ns$pvalue, method = "fdr")
+
+fig7d4 <- plot_ef_bar(lef_out_Lc_025_ns) +
+  theme(legend.position = "right", axis.title=element_text(size=8,family = "sans"), 
+        axis.text.y = element_text(size=8,face = 3, family = "sans"),
+        axis.text.x = element_text(size=8, family = "sans"),
+        legend.text = element_text(size=6,family = "sans"),
+        legend.direction = "vertical",
+        legend.title = element_text(size=6,family = "sans")) +
+  scale_fill_manual(values = c("#E87D72","#00BFC4")) +
+  ggtitle("Non-stunted")
+
+
+# stunted
+ps_lefse_Lc_05_stunted <- subset_samples(ps_lefse_Lc_05, Nutritional_status == "stunted")
+lef_out_Lc_05_s <- run_lefse(ps_lefse_Lc_05_stunted, wilcoxon_cutoff = 0.01, group = "Bile_acids_Concentration",
+                              taxa_rank = "Family", kw_cutoff = 0.05, norm = "CPM", multigrp_strat = TRUE, lda_cutoff = 2)
+
+fig7d5 <- plot_ef_bar(lef_out_Lc_05) +
+  theme(legend.position = "right", axis.title=element_text(size=8,family = "sans"), 
+        axis.text.y = element_text(size=8,face = 3, family = "sans"),
+        axis.text.x = element_text(size=8, family = "sans"),
+        legend.text = element_text(size=6,family = "sans"),
+        legend.direction = "vertical",
+        legend.title = element_text(size=6,family = "sans")) +
+  scale_fill_manual(values = c("#E87D72","#00BFC4")) +
+  ggtitle("Stunted")
+
+# non-stunted
+ps_lefse_Lc_05_ns <- subset_samples(ps_lefse_Lc_05, Nutritional_status == "non-stunted")
+lef_out_Lc_05_ns <- run_lefse(ps_lefse_Lc_05_ns, wilcoxon_cutoff = 0.01, group = "Bile_acids_Concentration",
+                              taxa_rank = "Family", kw_cutoff = 0.05, norm = "CPM", multigrp_strat = TRUE, lda_cutoff = 2)
+
+fig7d6 <- plot_ef_bar(lef_out_Lc_05_ns) +
+  theme(legend.position = "right", axis.title=element_text(size=8,family = "sans"), 
+        axis.text.y = element_text(size=8,face = 3, family = "sans"),
+        axis.text.x = element_text(size=8, family = "sans"),
+        legend.text = element_text(size=6,family = "sans"),
+        legend.direction = "vertical",
+        legend.title = element_text(size=6,family = "sans")) +
+  scale_fill_manual(values = c("#E87D72","#00BFC4")) +
+  ggtitle("Non-stunted")
+
+pdf("../Figure_panels/Figure7D_stratified.pdf", width = 10, height = 6 )
+grid.arrange(fig7d3, fig7d4, fig7d5, fig7d6, ncol = 2)
+dev.off()
+```
+
+## Fig 7 E
+Trends movement of important bacteria
+```{r}
+ps_Lc_fam_sign <- subset_taxa(ps_Lc_fam, Family == "Streptococcaceae" | Family == "Lactobacillaceae"
+                              | Family == "Enterobacteriaceae" | Family == "Lachnospiraceae")
+ps_Lc_fam_sign_m <- psmelt(ps_Lc_fam_sign)
+ps_Lc_fam_sign_m <- dplyr::left_join(ps_Lc_fam_sign_m, Lc_dataM, by= "Bile_acids_Concentration")
+
+# Absolute abundance
+ps_Lc_fam_sign_m <- ps_Lc_fam_sign_m %>%
+  mutate(Abs_abundance = Abundance * DNA_concentration)
+ps_Lc_fam_sign_abs  <- ps_Lc_fam_sign_m[,-3] 
+ps_Lc_fam_sign_abs <- ps_Lc_fam_sign_abs[,c(1,2,24, 3:23)]
+colnames(ps_Lc_fam_sign_abs)[3] <- "Abundance"
+ps_Lc_fam_sign_abs <- ps_Lc_fam_sign_abs %>%
+  mutate(RelAbs = "Absolute abundance")
+# Relative
+ps_Lc_fam_sign_rel <- ps_Lc_fam_sign_m
+colnames(ps_Lc_fam_sign_rel)
+ps_Lc_fam_sign_rel <- ps_Lc_fam_sign_rel[,-25]
+ps_Lc_fam_sign_rel <- ps_Lc_fam_sign_rel %>%
+  mutate(RelAbs = "Relative abundance")
+# Merge 
+ps_Lc_fam_sign_m <- rbind(ps_Lc_fam_sign_rel, ps_Lc_fam_sign_abs)
+
+
+fig7e <- suppressWarnings(print(ggplot(ps_Lc_fam_sign_m, aes(x=Tacids_num, y=Abundance)) +
+  geom_point(aes(shape=Nutritional_status), colour = "black", size = 1.5) +
+  geom_point(aes(shape= Nutritional_status, color = SIC), size =1) +
+  geom_smooth(aes(shape = Nutritional_status, color = SIC, fill = SIC), linewidth = 0.3, se = FALSE) +
+  scale_fill_manual(values = pal_SIC) +
+  scale_color_manual(values = pal_SIC) +
+  scale_shape_discrete(name = "Nutritional status", labels = c("non-stunted", "stunted")) +
+  scale_x_continuous(breaks=1:length(Lc_acidM.levels), labels=Lc_acidM.levels) +
+  ggh4x::facet_grid2(factor(RelAbs, 
+                            levels = c("Relative abundance", "Absolute abundance") ) ~ factor(Family, levels = c("Enterobacteriaceae",
+                                                                                                                 "Lachnospiraceae",
+                                                                                                                 "Streptococcaceae",
+                                                                                                                 "Lactobacillaceae")),
+                     scales = "free", independent = "y", switch = "y") +
+  theme_bw() +
+  theme(legend.position = "bottom", axis.title=element_blank(),
+        strip.text.x = element_text( size = 12, face = "italic", family = "sans"),
+        axis.text.x =  element_text(angle = 45, hjust = 1, size = 12, family = "sans"),
+        axis.text.y = element_text(size = 12, family = "sans"),
+        strip.placement = "outside",
+        strip.text.y.left= element_text( size = 12, family = "sans"),
+        panel.spacing.y = unit(2, "lines"),
+        legend.text = element_text(size=8,family = "sans"),
+        legend.title = element_text(size=8,family = "sans")) +
+  guides(fill=guide_legend(nrow=2))
+))
+
+pdf("../Figure_panels/Figure7E.pdf", width = 8, height = 6 )
+fig7e
+dev.off()
+
+source_data_7e <- ps_Lc_fam_sign_m %>% select(OTU, Sample, Tacids_num, Abundance, RelAbs, Nutritional_status)
+write_csv2(source_data_7e, "../Source_data/Figure7E.csv")
+
+
+# Reviewer request to stratified based on stunting status 
+ps_Lc_fam_sign_m$RelAbs <- factor(ps_Lc_fam_sign_m$RelAbs,
+                                  levels = c("Relative abundance", "Absolute abundance"))
+ps_Lc_fam_sign_m$Family <- factor(ps_Lc_fam_sign_m$Family,
+                                  levels = c("Enterobacteriaceae", "Lachnospiraceae",
+                                             "Streptococcaceae", "Lactobacillaceae"))
+ps_Lc_fam_sign_m$Nutritional_status <- factor(ps_Lc_fam_sign_m$Nutritional_status,
+                                              labels = c("non-stunted", "stunted"))
+
+fig7e_strat <-suppressWarnings(print(ggplot(ps_Lc_fam_sign_m, aes(x=Tacids_num, y=Abundance)) +
+  geom_point(aes(shape=Nutritional_status), colour = "black", size = 1.5) +
+  geom_point(aes(shape= Nutritional_status, color = SIC), size =1) +
+  geom_smooth(aes(shape = Nutritional_status, color = SIC, fill = SIC), linewidth = 0.3, se = FALSE) +
+  scale_fill_manual(values = pal_SIC) +
+  scale_color_manual(values = pal_SIC) +
+  scale_shape_discrete(name = "Nutritional status", labels = c("non-stunted", "stunted")) +
+  scale_x_continuous(breaks=1:length(Lc_acidM.levels), labels=Lc_acidM.levels) +
+  ggh4x::facet_nested(RelAbs + Nutritional_status ~ Family,
+                        scales = "free", independent = "y", switch = "y",
+                        nest_line = element_line(colour = "grey40")) +
+  theme_bw() +
+  theme(legend.position = "bottom", axis.title=element_blank(),
+        strip.text.x = element_text( size = 10, face = "italic", family = "sans"),
+        axis.text.x =  element_text(angle = 45, hjust = 1, size = 12, family = "sans"),
+        axis.text.y = element_text(size = 10, family = "sans"),
+        strip.placement = "outside",
+        strip.text.y.left= element_text( size = 12, family = "sans"),
+        panel.spacing.y = unit(2, "lines"),
+        legend.text = element_text(size=8,family = "sans"),
+        legend.title = element_text(size=8,family = "sans")) +
+  guides(fill=guide_legend(nrow=3))
+))
+
+pdf("/Users/admin/Documents/VLab_projects/02_Side_projects/SIC_BA_analysis/Manuscript/MS_data_fig_SY/Figure7E_stratStunting.pdf", width = 8, height = 10 )
+fig7e_strat
+dev.off()
+
+
+```
+
+# Fig S7 
+Characterization of the fecal samples and stool-derived in vitro communities
+## Fig S7A
+```{r}
+ctrl_ps_fam <- tax_glom(ps_ctrl, "Family")
+experiments <- as.list(as.matrix(unique(sample_data(ctrl_ps_fam)[,2])))
+# Loop over each experiment
+for (i in 1:10) {
+  exp_data <- subset_samples(ctrl_ps_fam, SIC == experiments[i])
+  exp_data <- prune_taxa(taxa_sums(exp_data)> 0, exp_data)
+  
+  unique_sample <- ps_venn(exp_data, "Type",fraction = 0,weight = FALSE,relative = TRUE,plot = FALSE)$Sample
+  unique_sic <- ps_venn(exp_data, "Type",fraction = 0,weight = FALSE,relative = TRUE,plot = FALSE)$SIC
+  common_samp_sic <- ps_venn(exp_data, "Type",fraction = 0,weight = FALSE,relative = TRUE,plot = FALSE)$Sample__SIC
+  
+  exp_data_m <- psmelt(exp_data)
+  
+  exp_data_m <- exp_data_m %>%
+    mutate(UniqueShare = "")
+  
+  exp_data_m$UniqueShare[which(exp_data_m$OTU %in% unique_sample)] <- "Feces"
+  exp_data_m$UniqueShare[which(exp_data_m$OTU %in% unique_sic)] <- "SICs"
+  exp_data_m$UniqueShare[which(exp_data_m$OTU %in% common_samp_sic)] <- "Shared"
+  
+  if (i == 1) {ctrlF_share = exp_data_m} else {ctrlF_share <- rbind(ctrlF_share, exp_data_m)}
+}
+
+ctrlF_share_grouped <- ctrlF_share %>%
+  group_by(SIC, UniqueShare) %>%
+  summarise(RelAbun = sum(Abundance)/6)
+
+mean(ctrlF_share_grouped$RelAbun[which(ctrlF_share_grouped$UniqueShare=="Shared")])
+
+figS7a <- ctrlF_share_grouped %>%
+  ggplot(aes_string(x = "SIC", y = "RelAbun", fill = "UniqueShare")) +
+  geom_bar(stat = "identity", position = "stack") +
+  scale_fill_manual(values = pal_3, name = "Sample") +
+  facet_grid(~SIC, scales = "free_x") +
+  theme_bw() + 
+  theme(legend.position = "right", 
+        axis.title.x=element_blank(),
+        axis.text.x=element_text(angle = 45, hjust = 1),
+        axis.ticks.x=element_blank()) +
+  ylab("Relative abundance (%)") + 
+  ggtitle("Family")
+
+pdf("../Figure_panels/FigureS7A.pdf", width = 8, height = 4)
+print(figS7a)
+dev.off()
+
+write_csv2(ctrlF_share_grouped, "../Source_data/FigureS7A.csv")
+```
+
+## Fig S7B
+```{r}
+experiments <- as.list(as.matrix(unique(sample_data(ctrl_ps_gen)[,2])))
+# Determine if a genus is present in both the sample and the SIC or unique to either the sample or the SIC
+for (i in 1:10) {
+  exp_data <- subset_samples(ctrl_ps_gen, SIC == experiments[i])
+  exp_data <- prune_taxa(taxa_sums(exp_data)> 0, exp_data)
+  
+  unique_sample <- ps_venn(exp_data, "Type",fraction = 0,weight = FALSE,relative = TRUE,plot = FALSE)$Sample
+  unique_sic <- ps_venn(exp_data, "Type",fraction = 0,weight = FALSE,relative = TRUE,plot = FALSE)$SIC
+  common_samp_sic <- ps_venn(exp_data, "Type",fraction = 0,weight = FALSE,relative = TRUE,plot = FALSE)$Sample__SIC
+  
+  exp_data_m <- psmelt(exp_data)
+  
+  exp_data_m <- exp_data_m %>%
+    mutate(UniqueShare = "")
+  
+  exp_data_m$UniqueShare[which(exp_data_m$OTU %in% unique_sample)] <- "Feces"
+  exp_data_m$UniqueShare[which(exp_data_m$OTU %in% unique_sic)] <- "SICs"
+  exp_data_m$UniqueShare[which(exp_data_m$OTU %in% common_samp_sic)] <- "Shared"
+  
+  if (i == 1) {ctrlG_share = exp_data_m} else {ctrlG_share <- rbind(ctrlG_share, exp_data_m)}
+}
+
+ctrlG_share_grouped <- ctrlG_share %>%
+  group_by(SIC, UniqueShare) %>%
+  summarise(RelAbun = sum(Abundance)/6)
+
+mean(ctrlG_share_grouped$RelAbun[which(ctrlG_share_grouped$UniqueShare=="Shared")])
+
+figS7b <- ctrlG_share_grouped %>%
+  ggplot(aes_string(x = "SIC", y = "RelAbun", fill = "UniqueShare")) +
+  geom_bar(stat = "identity", position = "stack") +
+  scale_fill_manual(values = pal_3, name = "Sample") +
+  facet_grid(~SIC, scales = "free_x") +
+  theme_bw() + 
+  theme(legend.position = "right", 
+        axis.title.x=element_blank(),
+        axis.text.x=element_text(angle = 45, hjust = 1),
+        axis.ticks.x=element_blank()) +
+  ylab("Relative abundance (%)") +
+  ggtitle("Genus")
+
+pdf("../Figure_panels/FigureS7B.pdf", width = 8, height = 4)
+print(figS7b)
+dev.off()
+
+write_csv2(ctrlG_share_grouped, "../Source_data/FigureS7B.csv")
+```
+
+## Fig S7C
+```{r}
+pdf("../Figure_panels/FigureS7C.pdf",width = 6, height = 4 )
+ps_venn(ctrl_ps_fam,
+  "Type",
+  fraction = 0,
+  weight = FALSE,
+  relative = TRUE,
+  plot = TRUE,
+  label=list(cex=2),
+  quantities = list(cex=4))
+dev.off()
+
+venn_list_S7C <- ps_venn(ctrl_ps_fam, "Type",
+                     fraction = 0, weight = FALSE, relative = TRUE,
+                     plot = FALSE)
+
+source_data_S7C <- stack(venn_list_S7C)
+colnames(source_data_S7C) <- c("taxon", "section")
+
+write_csv2(source_data_S7C, "../Source_data/FigureS7C.csv")
+
+```
+
+## Fig S7D
+```{r}
+pdf("../Figure_panels/FigureS7D.pdf",width = 6, height = 4 )
+ps_venn(ctrl_ps_gen,
+  "Type",
+  fraction = 0,
+  weight = FALSE,
+  relative = TRUE,
+  plot = TRUE,
+  label=list(cex=2),
+  quantities = list(cex=4))
+dev.off()
+
+venn_list_S7D <- ps_venn(ctrl_ps_gen, "Type",
+                     fraction = 0, weight = FALSE, relative = TRUE,
+                     plot = FALSE)
+
+source_data_S7D <- stack(venn_list_S7C)
+colnames(source_data_S7D) <- c("taxon", "section")
+
+write_csv2(source_data_S7D, "../Source_data/FigureS7D.csv")
+```
+
+## Fig S7E
+PCoA
+```{r}
+#PCoA
+ps_pcoa_fam <- tax_glom(ctrl_ps, "Family")
+dist.bc_fam <- phyloseq::distance(ps_pcoa_fam, method = "bray")
+
+figs7e <- plot_ordination(ps_pcoa_fam, ordinate(ps_pcoa_fam, "PCoA", distance = dist.bc_fam), 
+                color="Country_Nutritional_status", shape = "Country_Nutritional_status") +
+  stat_ellipse(mapping= aes(fill = Country_Nutritional_status),geom = "polygon", alpha = 0.2, show.legend = FALSE) +
+  scale_shape_manual(values=c(1:10)) +
+  labs(color="Country & Nutritional status", shape ="Country & Nutritional status")+ 
+  theme_bw() +
+  theme(axis.title = element_text(size = 8, family = "sans"),
+        axis.text = element_text(size = 8, family = "sans"),
+        legend.text = element_text(size = 8, family = "sans"), 
+        legend.title = element_text(size = 8, family = "sans")) +
+  geom_point(size=2, alpha=0.5)
+
+pdf("../Figure_panels/FigureS7E.pdf", width = 6, height = 4)
+print(figs7e)
+dev.off()
+
+ord_fam <- ordinate(ps_pcoa_fam, "PCoA", distance = dist.bc_fam)
+source_data_S7E <- plot_ordination(ps_pcoa_fam, ord_fam, justDF = TRUE)
+source_data_S7E <- data.frame(sample = rownames(source_data_S7E),
+                        source_data_S7E[, c("Axis.1", "Axis.2", "Country_Nutritional_status")])
+
+write_csv2(source_data_S7E, "../Source_data/FigureS7E.csv")
+```
+
+## Fig S7F
+```{r}
+
+figs7f.1 <- ctrl_ps_fam %>%
+  subset_samples(Type == "Sample") %>%
+  ps_venn(
+  "Country",
+  fraction = 0,
+  weight = FALSE,
+  relative = TRUE,
+  plot = TRUE,
+  label=list(cex=1),
+  quantities = list(cex=3)
+)
+
+ctrl_ps_fam_S7F1 <- ctrl_ps_fam %>%
+  subset_samples(Type == "Sample")
+
+source_data_S7F1 <- ps_venn(ctrl_ps_fam_S7F1, "Country",
+                     fraction = 0, weight = FALSE, relative = TRUE,
+                     plot = FALSE)
+
+source_data_S7F1 <- stack(source_data_S7F1)
+colnames(source_data_S7F1) <- c("taxon", "section")
+
+write_csv2(source_data_S7F2, "../Source_data/FigureS7F.1.csv")
+
+
+figs7f.2 <- ctrl_ps_fam %>%
+  subset_samples(Type == "SIC") %>%
+  ps_venn(
+  "Country",
+  fraction = 0,
+  weight = FALSE,
+  relative = TRUE,
+  plot = TRUE,
+  label=list(cex=1),
+  quantities = list(cex=3) 
+)
+
+ctrl_ps_fam_S7F2 <- ctrl_ps_fam %>%
+  subset_samples(Type == "SIC")
+
+venn_list_S7F2 <- ps_venn(ctrl_ps_gen, "Country",
+                     fraction = 0, weight = FALSE, relative = TRUE,
+                     plot = FALSE)
+
+source_data_S7F2 <- stack(venn_list_S7C)
+colnames(source_data_S7D) <- c("taxon", "section")
+
+
+write_csv2(source_data_S7F2, "../Source_data/FigureS7F.2.csv")
+
+pdf("../Figure_panels/FigureS7F.pdf",width = 12, height = 4 )
+grid.arrange(figs7f.1, figs7f.2, ncol = 2)
+dev.off()
+```
+
+
+# Fig S8
+Alpha diversity
+```{r}
+ps_all_asv <- physeq
+results_adiv <- estimate_richness(ps_all_asv, measures = c("Observed", "Shannon"))
+results_adiv <- results_adiv %>%
+  mutate(SampleID = rownames(results_adiv))
+results_adiv <- merge(results_adiv, md, by.x = "SampleID", by.y="fastqID")
+
+results_adiv_lc <- results_adiv %>%
+  filter(Bile_acids == "Lithocholic acid" | Bile_acids == "Control")
+results_adiv_lc <- dplyr::left_join(results_adiv_lc, Lc_dataM, by= "Bile_acids_Concentration")
+
+#Test observed
+p.adjust(wilcox.test(results_adiv_lc$Observed[which(results_adiv_lc$Bile_acids_Concentration=="Lithocholic acid 0.5")], 
+            results_adiv_lc$Observed[which(results_adiv_lc$Bile_acids_Concentration=="Control")])$p.value, method = "BH")
+p.adjust(wilcox.test(results_adiv_lc$Observed[which(results_adiv_lc$Bile_acids_Concentration=="Lithocholic acid 0.25")], 
+            results_adiv_lc$Observed[which(results_adiv_lc$Bile_acids_Concentration=="Control")])$p.value, method = "BH")
+p.adjust(wilcox.test(results_adiv_lc$Observed[which(results_adiv_lc$Bile_acids_Concentration=="Lithocholic acid 0.25")], 
+            results_adiv_lc$Observed[which(results_adiv_lc$Bile_acids_Concentration=="Lithocholic acid 0.5")])$p.value, method = "BH")
+ #Test Shannon
+p.adjust(wilcox.test(results_adiv_lc$Shannon[which(results_adiv_lc$Bile_acids_Concentration=="Lithocholic acid 0.5")], 
+            results_adiv_lc$Shannon[which(results_adiv_lc$Bile_acids_Concentration=="Control")])$p.value, method = "BH")
+p.adjust(wilcox.test(results_adiv_lc$Shannon[which(results_adiv_lc$Bile_acids_Concentration=="Lithocholic acid 0.25")], 
+            results_adiv_lc$Shannon[which(results_adiv_lc$Bile_acids_Concentration=="Control")])$p.value, method = "BH")
+p.adjust(wilcox.test(results_adiv_lc$Shannon[which(results_adiv_lc$Bile_acids_Concentration=="Lithocholic acid 0.25")], 
+            results_adiv_lc$Shannon[which(results_adiv_lc$Bile_acids_Concentration=="Lithocholic acid 0.5")])$p.value, method = "BH")
+
+results_adiv_cdc <- results_adiv %>%
+  filter(Bile_acids == "Chenodeoxycholic acid" | Bile_acids == "Control")
+results_adiv_cdc <- dplyr::left_join(results_adiv_cdc, Cdc_dataM, by= "Bile_acids_Concentration")
+
+#Test observed
+p.adjust(wilcox.test(results_adiv_cdc$Observed[which(results_adiv_cdc$Bile_acids_Concentration=="Chenodeoxycholic acid 0.5")], 
+            results_adiv_cdc$Observed[which(results_adiv_cdc$Bile_acids_Concentration=="Control")])$p.value, method = "BH")
+p.adjust(wilcox.test(results_adiv_cdc$Observed[which(results_adiv_cdc$Bile_acids_Concentration=="Chenodeoxycholic acid 0.25")], 
+            results_adiv_cdc$Observed[which(results_adiv_cdc$Bile_acids_Concentration=="Control")])$p.value, method = "BH")
+p.adjust(wilcox.test(results_adiv_cdc$Observed[which(results_adiv_cdc$Bile_acids_Concentration=="Chenodeoxycholic acid 0.25")], 
+            results_adiv_cdc$Observed[which(results_adiv_cdc$Bile_acids_Concentration=="Chenodeoxycholic acid 0.5")])$p.value, method = "BH")
+ #Test Shannon
+p.adjust(wilcox.test(results_adiv_cdc$Shannon[which(results_adiv_cdc$Bile_acids_Concentration=="Chenodeoxycholic acid 0.5")], 
+            results_adiv_cdc$Shannon[which(results_adiv_cdc$Bile_acids_Concentration=="Control")])$p.value, method = "BH")
+p.adjust(wilcox.test(results_adiv_cdc$Shannon[which(results_adiv_cdc$Bile_acids_Concentration=="Chenodeoxycholic acid 0.25")], 
+            results_adiv_cdc$Shannon[which(results_adiv_cdc$Bile_acids_Concentration=="Control")])$p.value, method = "BH")
+p.adjust(wilcox.test(results_adiv_cdc$Shannon[which(results_adiv_cdc$Bile_acids_Concentration=="Chenodeoxycholic acid 0.25")], 
+            results_adiv_cdc$Shannon[which(results_adiv_cdc$Bile_acids_Concentration=="Chenodeoxycholic acid 0.5")])$p.value, method = "BH")
+
+
+results_adiv_tcdc<- results_adiv %>%
+  filter(Bile_acids == "Taurochenodeoxycholic acid" | Bile_acids == "Control")
+results_adiv_tcdc <- dplyr::left_join(results_adiv_tcdc, Tcdc_dataM, by= "Bile_acids_Concentration")
+
+#Test observed
+p.adjust(wilcox.test(results_adiv_tcdc$Observed[which(results_adiv_tcdc$Bile_acids_Concentration=="Taurochenodeoxycholic acid 1")], 
+            results_adiv_tcdc$Observed[which(results_adiv_tcdc$Bile_acids_Concentration=="Control")])$p.value, method = "BH")
+p.adjust(wilcox.test(results_adiv_tcdc$Observed[which(results_adiv_tcdc$Bile_acids_Concentration=="Taurochenodeoxycholic acid 0.5")], 
+            results_adiv_tcdc$Observed[which(results_adiv_tcdc$Bile_acids_Concentration=="Control")])$p.value, method = "BH")
+p.adjust(wilcox.test(results_adiv_tcdc$Observed[which(results_adiv_tcdc$Bile_acids_Concentration=="Taurochenodeoxycholic acid 0.25")], 
+            results_adiv_tcdc$Observed[which(results_adiv_tcdc$Bile_acids_Concentration=="Control")])$p.value, method = "BH")
+p.adjust(wilcox.test(results_adiv_tcdc$Observed[which(results_adiv_tcdc$Bile_acids_Concentration=="Taurochenodeoxycholic acid 0.25")], 
+            results_adiv_tcdc$Observed[which(results_adiv_tcdc$Bile_acids_Concentration=="Taurochenodeoxycholic acid 0.5")])$p.value, method = "BH")
+p.adjust(wilcox.test(results_adiv_tcdc$Observed[which(results_adiv_tcdc$Bile_acids_Concentration=="Taurochenodeoxycholic acid 0.25")], 
+            results_adiv_tcdc$Observed[which(results_adiv_tcdc$Bile_acids_Concentration=="Taurochenodeoxycholic acid 1")])$p.value, method = "BH")
+p.adjust(wilcox.test(results_adiv_tcdc$Observed[which(results_adiv_tcdc$Bile_acids_Concentration=="Taurochenodeoxycholic acid 0.5")], 
+            results_adiv_tcdc$Observed[which(results_adiv_tcdc$Bile_acids_Concentration=="Taurochenodeoxycholic acid 1")])$p.value, method = "BH")
+ #Test Shannon
+p.adjust(wilcox.test(results_adiv_tcdc$Shannon[which(results_adiv_tcdc$Bile_acids_Concentration=="Taurochenodeoxycholic acid 1")], 
+            results_adiv_tcdc$Shannon[which(results_adiv_tcdc$Bile_acids_Concentration=="Control")])$p.value, method = "BH")
+p.adjust(wilcox.test(results_adiv_tcdc$Shannon[which(results_adiv_tcdc$Bile_acids_Concentration=="Taurochenodeoxycholic acid 0.5")], 
+            results_adiv_tcdc$Shannon[which(results_adiv_tcdc$Bile_acids_Concentration=="Control")])$p.value, method = "BH")
+p.adjust(wilcox.test(results_adiv_tcdc$Shannon[which(results_adiv_tcdc$Bile_acids_Concentration=="Taurochenodeoxycholic acid 0.25")], 
+            results_adiv_tcdc$Shannon[which(results_adiv_tcdc$Bile_acids_Concentration=="Control")])$p.value, method = "BH")
+p.adjust(wilcox.test(results_adiv_tcdc$Shannon[which(results_adiv_tcdc$Bile_acids_Concentration=="Taurochenodeoxycholic acid 0.25")], 
+            results_adiv_tcdc$Shannon[which(results_adiv_tcdc$Bile_acids_Concentration=="Taurochenodeoxycholic acid 0.5")])$p.value, method = "BH")
+p.adjust(wilcox.test(results_adiv_tcdc$Shannon[which(results_adiv_tcdc$Bile_acids_Concentration=="Taurochenodeoxycholic acid 0.25")], 
+            results_adiv_tcdc$Shannon[which(results_adiv_tcdc$Bile_acids_Concentration=="Taurochenodeoxycholic acid 1")])$p.value, method = "BH")
+p.adjust(wilcox.test(results_adiv_tcdc$Shannon[which(results_adiv_tcdc$Bile_acids_Concentration=="Taurochenodeoxycholic acid 0.5")], 
+            results_adiv_tcdc$Shannon[which(results_adiv_tcdc$Bile_acids_Concentration=="Taurochenodeoxycholic acid 1")])$p.value, method = "BH")
+
+
+results_adiv_tlc<- results_adiv %>%
+  filter(Bile_acids == "Taurolithocholic acid" | Bile_acids == "Control")
+results_adiv_tlc <- dplyr::left_join(results_adiv_tlc, Tlc_dataM, by= "Bile_acids_Concentration")
+
+#Test
+p.adjust(wilcox.test(results_adiv_tlc$Observed[which(results_adiv_tlc$Bile_acids_Concentration=="Taurolithocholic acid 0.25")], 
+            results_adiv_tlc$Observed[which(results_adiv_tlc$Bile_acids_Concentration=="Control")])$p.value, method = "BH")
+p.adjust(wilcox.test(results_adiv_tlc$Shannon[which(results_adiv_tlc$Bile_acids_Concentration=="Taurolithocholic acid 0.25")], 
+            results_adiv_tlc$Shannon[which(results_adiv_tlc$Bile_acids_Concentration=="Control")])$p.value, method = "BH")
+
+```
+
+## Fig S8A
+```{r}
+figS8a <- ggplot(results_adiv_lc, aes(x=Tacids_num , y=Observed)) +
+  geom_point(colour = "black", size = 1.5) +
+  geom_point(aes(color = SIC), size =1) +
+  stat_summary(fun.y=mean, geom="line", aes(color = SIC)) +
+  scale_color_manual(values = pal_SIC) +
+  scale_x_continuous(
+    breaks=1:length(Lc_acidM.levels),
+    labels=Lc_acidM.levels) +
+  theme_bw() +
+  theme(axis.title.x=element_blank(),
+        axis.text = element_text(size = 7)) +
+   ggtitle("Lithocholic acid")
+
+pdf("../Figure_panels/FigureS8A.pdf", width = 7, height = 4)
+figS8a
+dev.off()
+
+source_data_S8A <- results_adiv_lc %>% select(SIC, Tacids_num, Bile_acids_Concentration, Observed)
+write_csv2(source_data_S8A, "../Source_data/FigureS8A.csv")
+```
+
+##Fig S8B
+```{r}
+figS8b <- ggplot(results_adiv_lc, aes(x=Tacids_num , y=Shannon)) +
+  geom_point(colour = "black", size = 1.5) +
+  geom_point(aes(color = SIC), size =1) +
+  stat_summary(fun.y=mean, geom="line", aes(color = SIC)) +
+  scale_color_manual(values = pal_SIC) +
+  scale_x_continuous(
+    breaks=1:length(Lc_acidM.levels),
+    labels=Lc_acidM.levels) +
+  theme_bw() +
+  theme(axis.title.x=element_blank(),
+        axis.text = element_text(size = 7))+
+   ggtitle("Lithocholic acid")
+
+pdf("../Figure_panels/FigureS8B.pdf", width = 7, height = 4)
+figS8b
+dev.off()
+
+source_data_S8B <- results_adiv_lc %>% select(SIC, Tacids_num, Bile_acids_Concentration, Shannon)
+write_csv2(source_data_S8B, "../Source_data/FigureS8B.csv")
+```
+
+## Fig S8C
+```{r}
+figS8c <- ggplot(results_adiv_tlc, aes(x=Tacids_num , y=Observed)) +
+  geom_point(colour = "black", size = 1.5) +
+  geom_point(aes(color = SIC), size =1) +
+  stat_summary(fun.y=mean, geom="line", aes(color = SIC)) +
+  scale_color_manual(values = pal_SIC) +
+  scale_x_continuous(
+    breaks=1:length(Tlc_acidM.levels),
+    labels=Tlc_acidM.levels) +
+  theme_bw() +
+  theme(axis.title.x=element_blank(),
+        axis.text = element_text(size = 7)) +
+   ggtitle("Taurolithocholic acid")
+
+pdf("../Figure_panels/FigureS8C.pdf", width = 7, height = 4)
+figS8c
+dev.off()
+
+source_data_S8C <- results_adiv_tlc %>% select(SIC, Tacids_num, Bile_acids_Concentration, Observed)
+write_csv2(source_data_S8C, "../Source_data/FigureS8C.csv")
+```
+
+## Fig S8D
+```{r}
+figS8d <- ggplot(results_adiv_tlc, aes(x=Tacids_num , y=Shannon)) +
+  geom_point(colour = "black", size = 1.5) +
+  geom_point(aes(color = SIC), size =1) +
+  stat_summary(fun.y=mean, geom="line", aes(color = SIC)) +
+  scale_color_manual(values = pal_SIC) +
+  scale_x_continuous(
+    breaks=1:length(Tlc_acidM.levels),
+    labels=Tlc_acidM.levels) +
+  theme_bw() +
+  theme(axis.title.x=element_blank(),
+        axis.text = element_text(size = 7)) +
+   ggtitle("Taurolithocholic acid")
+
+pdf("../Figure_panels/FigureS8D.pdf", width = 7, height = 4)
+figS8d
+dev.off()
+
+source_data_S8D <- results_adiv_tlc %>% select(SIC, Tacids_num, Bile_acids_Concentration, Shannon)
+write_csv2(source_data_S8D, "../Source_data/FigureS8D.csv")
+```
+
+## Fig S8E
+```{r}
+figS8e <- ggplot(results_adiv_cdc, aes(x=Tacids_num , y=Observed)) +
+  geom_point(colour = "black", size = 1.5) +
+  geom_point(aes(color = SIC), size =1) +
+  stat_summary(fun.y=mean, geom="line", aes(color = SIC)) +
+  scale_color_manual(values = pal_SIC) +
+  scale_x_continuous(
+    breaks=1:length(Cdc_acidM.levels),
+    labels=Cdc_acidM.levels) +
+  theme_bw() +
+  theme(axis.title.x=element_blank(),
+        axis.text = element_text(size = 7)) +
+   ggtitle("Chenodeoxycholic acid")
+
+pdf("../Figure_panels/FigureS8E.pdf", width = 7, height = 4)
+figS8e
+dev.off()
+
+source_data_S8E <- results_adiv_cdc %>% select(SIC, Tacids_num, Bile_acids_Concentration, Observed)
+write_csv2(source_data_S8E, "../Source_data/FigureS8E.csv")
+```
+
+## Fig S8F
+```{r}
+figS8f <- ggplot(results_adiv_cdc, aes(x=Tacids_num , y=Shannon)) +
+  geom_point(colour = "black", size = 1.5) +
+  geom_point(aes(color = SIC), size =1) +
+  stat_summary(fun.y=mean, geom="line", aes(color = SIC)) +
+  scale_color_manual(values = pal_SIC) +
+  scale_x_continuous(
+    breaks=1:length(Cdc_acidM.levels),
+    labels=Cdc_acidM.levels) +
+  theme_bw() +
+  theme(axis.title.x=element_blank(),
+        axis.text = element_text(size = 7)) +
+   ggtitle("Chenodeoxycholic acid")
+
+pdf("../Figure_panels/FigureS8F.pdf", width = 7, height = 4)
+figS8f
+dev.off()
+
+source_data_S8F <- results_adiv_cdc %>% select(SIC, Tacids_num, Bile_acids_Concentration, Shannon)
+write_csv2(source_data_S8F, "../Source_data/FigureS8F.csv")
+```
+
+## Fig S8G
+```{r}
+figS8g <- ggplot(results_adiv_tcdc, aes(x=Tacids_num , y=Observed)) +
+  geom_point(colour = "black", size = 1.5) +
+  geom_point(aes(color = SIC), size =1) +
+  stat_summary(fun.y=mean, geom="line", aes(color = SIC)) +
+  scale_color_manual(values = pal_SIC) +
+  scale_x_continuous(
+    breaks=1:length(Tcdc_acidM.levels),
+    labels=Tcdc_acidM.levels) +
+  theme_bw() +
+  theme(axis.title.x=element_blank(),
+        axis.text = element_text(size = 7)) +
+   ggtitle("Taurochenodeoxycholic acid")
+
+pdf("../Figure_panels/FigureS8G.pdf", width = 7, height = 4)
+figS8g
+dev.off()
+
+source_data_S8G <- results_adiv_tcdc %>% select(SIC, Tacids_num, Bile_acids_Concentration, Observed)
+write_csv2(source_data_S8G, "../Source_data/FigureS8G.csv")
+```
+
+## Fig S8H
+```{r}
+figS8h <- ggplot(results_adiv_tcdc, aes(x=Tacids_num , y=Shannon)) +
+  geom_point(colour = "black", size = 1.5) +
+  geom_point(aes(color = SIC), size =1) +
+  stat_summary(fun.y=mean, geom="line", aes(color = SIC)) +
+  scale_color_manual(values = pal_SIC) +
+  scale_x_continuous(
+    breaks=1:length(Tcdc_acidM.levels),
+    labels=Tcdc_acidM.levels) +
+  theme_bw() +
+  theme(axis.title.x=element_blank(),
+        axis.text = element_text(size = 7)) +
+   ggtitle("Taurochenodeoxycholic acid")
+
+pdf("../Figure_panels/FigureS8H.pdf", width = 7, height = 4)
+figS8h
+dev.off()
+
+source_data_S8H <- results_adiv_tcdc %>% select(SIC, Tacids_num, Bile_acids_Concentration, Shannon)
+write_csv2(source_data_S8H, "../Source_data/FigureS8H.csv")
+```
+
+# Fig S9
+All taxa for lithocholic acid
+```{r}
+Lc_marker_table <- rbind(marker_table(lef_out_Lc_025), marker_table(lef_out_Lc_05))
+ps_Lc_fam_sign <- subset_taxa(ps_Lc_fam, Family %in% unique(Lc_marker_table$feature[which(Lc_marker_table$ef_lda >2)]))
+ps_Lc_fam_sign_m <- psmelt(ps_Lc_fam_sign)
+ps_Lc_fam_sign_m <- dplyr::left_join(ps_Lc_fam_sign_m, Lc_dataM, by= "Bile_acids_Concentration")
+
+# Absolute abundance
+ps_Lc_fam_sign_m <- ps_Lc_fam_sign_m %>%
+  mutate(Abs_abundance = Abundance * DNA_concentration)
+ps_Lc_fam_sign_abs  <- ps_Lc_fam_sign_m[,-3] 
+ps_Lc_fam_sign_abs <- ps_Lc_fam_sign_abs[,c(1,2,24, 3:23)]
+colnames(ps_Lc_fam_sign_abs)[3] <- "Abundance"
+ps_Lc_fam_sign_abs <- ps_Lc_fam_sign_abs %>%
+  mutate(RelAbs = "Absolute abundance")
+# Relative
+ps_Lc_fam_sign_rel <- ps_Lc_fam_sign_m
+colnames(ps_Lc_fam_sign_rel)
+ps_Lc_fam_sign_rel <- ps_Lc_fam_sign_rel[,-25]
+ps_Lc_fam_sign_rel <- ps_Lc_fam_sign_rel %>%
+  mutate(RelAbs = "Relative abundance")
+# Find the order
+Lc_fam_rel_order <- ps_Lc_fam_sign_rel %>% 
+  group_by(Family) %>%
+  summarise(MeanAbundance = mean(Abundance))
+Lc_fam_rel_order <- Lc_fam_rel_order[order(Lc_fam_rel_order$MeanAbundance, decreasing = TRUE),]
+# Merge 
+ps_Lc_fam_sign_m <- rbind(ps_Lc_fam_sign_rel, ps_Lc_fam_sign_abs)
+
+unique(ps_Lc_fam_sign_m$Family) # 18 Families split in 3
+ps_Lc_fam_sign_m_1 <- ps_Lc_fam_sign_m %>% filter(Family %in% Lc_fam_rel_order$Family[1:6])
+ps_Lc_fam_sign_m_2 <- ps_Lc_fam_sign_m %>% filter(Family %in% Lc_fam_rel_order$Family[7:12])
+ps_Lc_fam_sign_m_3 <- ps_Lc_fam_sign_m %>% filter(Family %in% Lc_fam_rel_order$Family[13:18])
+
+
+figs9_1 <- suppressWarnings(ggplot(ps_Lc_fam_sign_m_1, aes(x=Tacids_num, y=Abundance)) +
+  geom_point(aes(shape=Nutritional_status), colour = "black", size = 1.5) +
+  geom_point(aes(shape= Nutritional_status, color = SIC), size =1) +
+  geom_smooth(aes(shape = Nutritional_status, color = SIC, fill = SIC), linewidth = 0.3, se = FALSE) +
+  scale_fill_manual(values = pal_SIC) +
+  scale_color_manual(values = pal_SIC) +
+  scale_shape_discrete(name = "Nutritional status", labels = c("non-stunted", "stunted")) +
+  scale_x_continuous(breaks=1:length(Lc_acidM.levels), labels=Lc_acidM.levels) +
+  ggh4x::facet_grid2(factor(RelAbs, 
+                            levels = c("Relative abundance", "Absolute abundance") ) ~ factor(Family, levels = unique(Lc_fam_rel_order$Family)),
+                     scales = "free", independent = "y", switch = "y") +
+  theme_bw() +
+  theme(legend.position = "none", axis.title=element_blank(),
+        strip.text.x = element_text( size = 8, face = "italic", family = "sans"),
+        axis.text.x =  element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.text.y = element_text(size = 8, family = "sans"),
+        strip.placement = "outside",
+        strip.text.y.left= element_text( size = 8, family = "sans"),
+        panel.spacing.x = unit(1, "lines"),
+        legend.text = element_blank()))
+
+figs9_2 <- suppressWarnings(ggplot(ps_Lc_fam_sign_m_2, aes(x=Tacids_num, y=Abundance)) +
+  geom_point(aes(shape=Nutritional_status), colour = "black", size = 1.5) +
+  geom_point(aes(shape= Nutritional_status, color = SIC), size =1) +
+  geom_smooth(aes(shape = Nutritional_status, color = SIC, fill = SIC), linewidth = 0.3, se = FALSE) +
+  scale_fill_manual(values = pal_SIC) +
+  scale_color_manual(values = pal_SIC) +
+  scale_shape_discrete(name = "Nutritional status", labels = c("non-stunted", "stunted")) +
+  scale_x_continuous(breaks=1:length(Lc_acidM.levels), labels=Lc_acidM.levels) +
+  ggh4x::facet_grid2(factor(RelAbs, 
+                            levels = c("Relative abundance", "Absolute abundance") ) ~ factor(Family, levels = unique(Lc_fam_rel_order$Family)),
+                     scales = "free", independent = "y", switch = "y") +
+  theme_bw() +
+  theme(legend.position = "none", axis.title=element_blank(),
+        strip.text.x = element_text( size = 8, face = "italic", family = "sans"),
+        axis.text.x =  element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.text.y = element_text(size = 8, family = "sans"),
+        strip.placement = "outside",
+        strip.text.y.left= element_text( size = 8, family = "sans"),
+        panel.spacing.x = unit(1, "lines"),
+        legend.text = element_blank()))
+
+
+figs9_3 <- suppressWarnings(ggplot(ps_Lc_fam_sign_m_3, aes(x=Tacids_num, y=Abundance)) +
+  geom_point(aes(shape=Nutritional_status), colour = "black", size = 1.5) +
+  geom_point(aes(shape= Nutritional_status, color = SIC), size =1) +
+  geom_smooth(aes(shape = Nutritional_status, color = SIC, fill = SIC), linewidth = 0.3, se = FALSE) +
+  scale_fill_manual(values = pal_SIC) +
+  scale_color_manual(values = pal_SIC) +
+  scale_shape_discrete(name = "Nutritional status", labels = c("non-stunted", "stunted")) +
+  scale_x_continuous(breaks=1:length(Lc_acidM.levels), labels=Lc_acidM.levels) +
+  ggh4x::facet_grid2(factor(RelAbs, 
+                            levels = c("Relative abundance", "Absolute abundance") ) ~ factor(Family, levels = unique(Lc_fam_rel_order$Family)),
+                     scales = "free", independent = "y", switch = "y") +
+  theme_bw() +
+  theme(legend.position = "bottom", axis.title=element_blank(),
+        strip.text.x = element_text( size = 8, face = "italic", family = "sans"),
+        axis.text.x =  element_text(angle = 45, hjust = 1, size = 8, family = "sans"),
+        axis.text.y = element_text(size = 8, family = "sans"),
+        strip.placement = "outside",
+        strip.text.y.left= element_text( size = 8, family = "sans"),
+        panel.spacing.x = unit(1, "lines"),
+        legend.text = element_text(size=8,family = "sans"),
+        legend.title = element_text(size=8,family = "sans")) +
+  guides(fill=guide_legend(nrow=2)))
+
+
+pdf("../Figure_panels/FigureS9.pdf", width = 10, height = 10 )
+suppressWarnings(grid.arrange(figs9_1, figs9_2, figs9_3, ncol = 1, heights = c(2,2,3.3)))
+dev.off()
+
+source_data_S9 <- ps_Lc_fam_sign_m %>% select(SIC, Bile_acids_Concentration, Tacids_num, Abundance, Nutritional_status)
+
+write_csv2(source_data_S9, "../Source_data/FigureS9.csv")
+```
+
+
+# Fig S10
+Taurolithocholic acid
+## Fig S10A
+PCoA
+```{r}
+OTU_taulitho = as(otu_table(ps_Tlc_fam), "matrix")
+otu_taulitho <- as.data.frame(OTU_taulitho)
+TAX_taulitho = as(tax_table(ps_Tlc_fam), "matrix")
+tax_taulitho <- as.data.frame(TAX_taulitho)
+META_taulitho = as(sample_data(ps_Tlc_fam), "matrix")
+meta_taulitho <- as.data.frame(META_taulitho)
+meta_taulitho <- meta_taulitho %>%
+  mutate(SIC_NUT_STAT = str_c(SIC, "_", Nutritional_status))
+meta_taulitho <- meta_taulitho %>%
+  mutate(SIMPLE_NUTSTAT = "")
+meta_taulitho$SIMPLE_NUTSTAT[which(meta_taulitho$Nutritional_status=="stunted")] <- "S"
+meta_taulitho$SIMPLE_NUTSTAT[which(meta_taulitho$Nutritional_status=="non-stunted")] <- "N"
+tax_otu <-cbind(tax_taulitho, otu_taulitho)
+
+tax_otu$Name <- str_c(tax_otu$Kingdom, '_',tax_otu$Phylum, '_', tax_otu$Class, '_', tax_otu$Order, '_', tax_otu$Family)
+tax_otu[, 68] <- as.character(tax_otu[, 68])
+length(unique(tax_otu[,68]))
+rownames(tax_otu) <- tax_otu[,68]
+tax_otu <- tax_otu[,-c(1:7,68)]
+tax_otu <- t(tax_otu)
+class(tax_otu) <- "numeric"
+tax_otu <- as.data.frame(tax_otu)
+dist <- vegdist(tax_otu[, 1:60],  method = "bray")
+PCOA <- pcoa(dist)
+vectorPCOA <- as.data.frame(PCOA$vectors[, 1:2])
+
+# Arrows and taxa name
+env.fit <- envfit(vectorPCOA, tax_otu[,1:60], perm = 999) 
+env.fit.sig  <- as.data.frame(scores(env.fit, display = "vectors"))
+env.fit.vect <- as.list(env.fit$vectors)
+coordinates <- cbind(as.data.frame(env.fit.vect$arrows*sqrt(env.fit.vect$r)), as.data.frame(env.fit.vect$pvals))
+coordinates_sign <- subset(coordinates, as.data.frame(env.fit.vect$pvals) <= 0.05)
+coordinates_sign <- cbind(coordinates_sign, species = rownames(coordinates_sign))
+arr_pvals_coord <- coordinates_sign %>%
+  mutate(Coord = (Axis.1*Axis.1)+(Axis.2*Axis.2))
+arr_pvals_coord[,5] <- as.numeric(arr_pvals_coord[,5])
+df_envfit <- scores(env.fit,display=c("vectors"))
+df_envfit <- df_envfit*vegan:::ordiArrowMul(df_envfit)
+df_envfit <- as.data.frame(df_envfit)
+df_envfit$species <- rownames(df_envfit)
+df_envfit <- df_envfit %>% 
+  filter(species %in% coordinates_sign$species)
+arrows_names <- str_split_fixed(df_envfit$species, "_", 5)
+arrows_names <- as.data.frame(arrows_names)
+df_envfit <- df_envfit %>% 
+  mutate(species_names = arrows_names$V5)
+
+# Plotting
+ft.scores <- as.data.frame(vectorPCOA)
+ft.scores$fastqID <- rownames(tax_otu)
+ft.scores$Bile_acids_Concentration <- meta_taulitho$Bile_acids_Concentration
+ft.scores$SIC <- meta_taulitho$SIC_NUT_STAT
+ft.scores$SNU <- meta_taulitho$SIMPLE_NUTSTAT
+ft.scores$SNU <- meta_taulitho$SIMPLE_NUTSTAT
+ft.scores.d <- distinct(ft.scores)
+per_explained <- 100*PCOA$values$Relative_eig / sum(PCOA$values$Relative_eig)
+per_explained <- round(per_explained[1:2], digits = 1)
+labs <- c(glue("Axis1 [{per_explained[1]}%]"),
+          glue("Axis2 [{per_explained[2]}%]"))
+
+centroid <- ft.scores.d %>%
+  group_by(SIC, Bile_acids_Concentration, SNU) %>%
+  summarise(axis1 = mean(Axis.1),
+            axis2 = mean(Axis.2), .groups = "drop")
+```
+
+```{r}
+figS10a <- ggplot() +
+   geom_point(aes(x=centroid$axis1, y= centroid$axis2,color = centroid$SIC, shape = centroid$Bile_acids_Concentration), size = 3, show.legend = TRUE) +
+  geom_line(aes(x=centroid$axis1, y= centroid$axis2,color = centroid$SIC, group = centroid$SIC)) +
+  geom_text(aes(x=centroid$axis1, y= centroid$axis2, label = centroid$SNU),colour = "white", size = 2) +
+  scale_color_manual(values = pal_SIC, name = "SIC", guide = "none") +
+  scale_shape_manual(limits = c("Control", "Taurolithocholic acid 0.25"), values=c(15:17), name = "") +
+  geom_segment(aes(x = 0, y = 0, xend = df_envfit$Axis.1*0.5,yend = df_envfit$Axis.2*0.5),
+            arrow = arrow(length = unit(0.2, "cm")),color="#808080",alpha=0.5) +
+  geom_text(aes(df_envfit$Axis.1*0.52, df_envfit$Axis.2*0.52, label = df_envfit$species_names, fontface=3), color="#303030", size=2) +
+  ggtitle("") +
+  xlab(labs[1]) +
+  ylab(labs[2]) +
+  theme_bw() + 
+  theme(legend.position = "bottom", 
+        axis.title=element_text(size=8,family = "sans"), 
+        axis.text = element_text(size=8,family = "sans"),
+        legend.text = element_text(size=8,family = "sans"),
+        legend.title = element_text(size=8,family = "sans"))
+
+pdf("../Figure_panels/FigureS10A.pdf", width = 9, height = 5)
+print(figS10a)
+dev.off()
+
+write.csv(centroid, "../Source_data/FigureS10a1.csv")
+write.csv(df_envfit, "../Source_data/FigureS10a2.csv")
+```
+## Fig S10B
+Lefse
+```{r}
+lef_out_Tlc <- run_lefse(ps_Tlc_fam, wilcoxon_cutoff = 0.01, group = "Bile_acids",
+                              taxa_rank = "Family", kw_cutoff = 0.05, norm = "CPM", multigrp_strat = TRUE, lda_cutoff = 2)
+figS10b <- plot_ef_bar(lef_out_Tlc) +
+  theme(legend.position = "bottom", axis.title=element_text(size=10,family = "sans"), 
+        axis.text.y = element_text(size=10,face = 3, family = "sans"),
+        axis.text.x = element_text(size=10, family = "sans"),
+        legend.text = element_text(size=8,family = "sans"),
+        legend.justification = "left",
+        legend.title = element_text(size=8,family = "sans")) +
+  scale_fill_manual(values = c("#E87D72","#00BFC4"))
+
+pdf("../Figure_panels/FigureS10B.pdf", width = 6, height = 4 )
+figS10b
+dev.off()
+
+source_data_S10B <- as.matrix(marker_table(lef_out_Tlc))
+write.csv2(source_data_S10B, "../Source_data/FigureS10B.csv")
+
+```
+## Fig S10C
+```{r}
+Tlc_marker_table <- marker_table(lef_out_Tlc)
+ps_Tlc_fam_sign <- subset_taxa(ps_Tlc_fam, Family %in% Tlc_marker_table$feature[which(Tlc_marker_table$ef_lda >2)])
+ps_Tlc_fam_sign_m <- psmelt(ps_Tlc_fam_sign)
+ps_Tlc_fam_sign_m <- dplyr::left_join(ps_Tlc_fam_sign_m, Tlc_dataM, by= "Bile_acids_Concentration")
+
+# Absolute abundance calculation
+ps_Tlc_fam_sign_m <- ps_Tlc_fam_sign_m %>%
+  mutate(Abs_abundance = Abundance * DNA_concentration)
+ps_Tlc_fam_sign_abs  <- ps_Tlc_fam_sign_m[,-3] 
+ps_Tlc_fam_sign_abs <- ps_Tlc_fam_sign_abs[,c(1,2,24, 3:23)]
+colnames(ps_Tlc_fam_sign_abs)[3] <- "Abundance"
+ps_Tlc_fam_sign_abs <- ps_Tlc_fam_sign_abs %>%
+  mutate(RelAbs = "Absolute abundance")
+# Relative
+ps_Tlc_fam_sign_rel <- ps_Tlc_fam_sign_m
+ps_Tlc_fam_sign_rel <- ps_Tlc_fam_sign_rel[,-25]
+ps_Tlc_fam_sign_rel <- ps_Tlc_fam_sign_rel %>%
+  mutate(RelAbs = "Relative abundance")
+# Find the order
+Tlc_fam_rel_order <- ps_Tlc_fam_sign_rel %>% 
+  group_by(Family) %>%
+  summarise(MeanAbundance = mean(Abundance))
+Tlc_fam_rel_order <- Tlc_fam_rel_order[order(Tlc_fam_rel_order$MeanAbundance, decreasing = TRUE),]
+# Merge
+ps_Tlc_fam_sign_m <- rbind(ps_Tlc_fam_sign_rel, ps_Tlc_fam_sign_abs)
+
+unique(ps_Tlc_fam_sign_m$Family) # 15 Families split in 3x5
+ps_Tlc_fam_sign_m_1 <- ps_Tlc_fam_sign_m %>% filter(Family %in% Tlc_fam_rel_order$Family[1:5])
+ps_Tlc_fam_sign_m_2 <- ps_Tlc_fam_sign_m %>% filter(Family %in% Tlc_fam_rel_order$Family[6:10])
+ps_Tlc_fam_sign_m_3 <- ps_Tlc_fam_sign_m %>% filter(Family %in% Tlc_fam_rel_order$Family[11:15])
+
+figS10c_1 <- suppressWarnings(ggplot(ps_Tlc_fam_sign_m_1, aes(x=Tacids_num, y=Abundance)) +
+  geom_point(aes(shape=Nutritional_status), colour = "black", size = 1.5) +
+  geom_point(aes(shape= Nutritional_status, color = SIC), size =1) +
+  geom_smooth(aes(shape = Nutritional_status, color = SIC, fill = SIC), linewidth = 0.3, se = FALSE) +
+  scale_fill_manual(values = pal_SIC) +
+  scale_color_manual(values = pal_SIC) +
+  scale_shape_discrete(name = "Nutritional status", labels = c("non-stunted", "stunted")) +
+  scale_x_continuous(breaks=1:length(Tlc_acidM.levels), labels=Tlc_acidM.levels) +
+  ggh4x::facet_grid2(factor(RelAbs, 
+                            levels = c("Relative abundance", "Absolute abundance") ) ~ factor(Family, levels = unique(Tlc_fam_rel_order$Family)),
+                     scales = "free", independent = "y", switch = "y") +
+  theme_bw() +
+  theme(legend.position = "none", axis.title=element_blank(),
+        strip.text.x = element_text( size = 7, face = "italic", family = "sans"),
+        axis.text.x =  element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.text.y = element_text(size = 8, family = "sans"),
+        strip.placement = "outside",
+        strip.text.y.left= element_text( size = 8, family = "sans"),
+        panel.spacing.x = unit(1, "lines"),
+        legend.text = element_blank()))
+
+figS10c_2 <- suppressWarnings(ggplot(ps_Tlc_fam_sign_m_2, aes(x=Tacids_num, y=Abundance)) +
+  geom_point(aes(shape=Nutritional_status), colour = "black", size = 1.5) +
+  geom_point(aes(shape= Nutritional_status, color = SIC), size =1) +
+  geom_smooth(aes(shape = Nutritional_status, color = SIC, fill = SIC), linewidth = 0.3, se = FALSE) +
+  scale_fill_manual(values = pal_SIC) +
+  scale_color_manual(values = pal_SIC) +
+  scale_shape_discrete(name = "Nutritional status", labels = c("non-stunted", "stunted")) +
+  scale_x_continuous(breaks=1:length(Tlc_acidM.levels), labels=Tlc_acidM.levels) +
+  ggh4x::facet_grid2(factor(RelAbs, 
+                            levels = c("Relative abundance", "Absolute abundance") ) ~ factor(Family, levels = unique(Tlc_fam_rel_order$Family)),
+                     scales = "free", independent = "y", switch = "y") +
+  theme_bw() +
+  theme(legend.position = "none", axis.title=element_blank(),
+        strip.text.x = element_text( size = 7, face = "italic", family = "sans"),
+        axis.text.x =  element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.text.y = element_text(size = 8, family = "sans"),
+        strip.placement = "outside",
+        strip.text.y.left= element_text( size = 8, family = "sans"),
+        panel.spacing.x = unit(1, "lines"),
+        legend.text = element_blank()))
+
+
+figS10c_3 <- suppressWarnings(ggplot(ps_Tlc_fam_sign_m_3, aes(x=Tacids_num, y=Abundance)) +
+  geom_point(aes(shape=Nutritional_status), colour = "black", size = 1.5) +
+  geom_point(aes(shape= Nutritional_status, color = SIC), size =1) +
+  geom_smooth(aes(shape = Nutritional_status, color = SIC, fill = SIC), linewidth = 0.3, se = FALSE) +
+  scale_fill_manual(values = pal_SIC) +
+  scale_color_manual(values = pal_SIC) +
+  scale_shape_discrete(name = "Nutritional status", labels = c("non-stunted", "stunted")) +
+  scale_x_continuous(breaks=1:length(Tlc_acidM.levels), labels=Tlc_acidM.levels) +
+  ggh4x::facet_grid2(factor(RelAbs, 
+                            levels = c("Relative abundance", "Absolute abundance") ) ~ factor(Family, levels = unique(Tlc_fam_rel_order$Family)),
+                     scales = "free", independent = "y", switch = "y") +
+  theme_bw() +
+  theme(legend.position = "bottom", axis.title=element_blank(),
+        strip.text.x = element_text( size = 7, face = "italic", family = "sans"),
+        axis.text.x =  element_text(angle = 45, hjust = 1, size = 8, family = "sans"),
+        axis.text.y = element_text(size = 8, family = "sans"),
+        strip.placement = "outside",
+        strip.text.y.left= element_text( size = 8, family = "sans"),
+        panel.spacing.x = unit(1, "lines"),
+        legend.text = element_text(size=8,family = "sans"),
+        legend.title = element_text(size=8,family = "sans")) +
+  guides(fill=guide_legend(nrow=2)))
+
+pdf("../Figure_panels/FigureS10C.pdf", width = 8, height = 10 )
+suppressWarnings(grid.arrange(figS10c_1, figS10c_2, figS10c_3, ncol = 1, heights = c(2,2,3.4)))
+dev.off()
+
+source_data_S10C <- ps_Tlc_fam_sign_m %>% select(SIC, Bile_acids_Concentration, Tacids_num, Abundance, Nutritional_status)
+
+write_csv2(source_data_S10C, "../Source_data/FigureS10C.csv")
+
+```
+
+# Fig S11
+Chenodeochycolic acid
+## Fig S11A
+PCoA
+```{r}
+OTU_cheno = as(otu_table(ps_Cdc_fam), "matrix")
+otu_cheno <- as.data.frame(OTU_cheno)
+TAX_cheno = as(tax_table(ps_Cdc_fam), "matrix")
+tax_cheno <- as.data.frame(TAX_cheno)
+META_cheno = as(sample_data(ps_Cdc_fam), "matrix")
+meta_cheno <- as.data.frame(META_cheno)
+meta_cheno <- meta_cheno %>%
+  mutate(SIC_NUT_STAT = str_c(SIC, "_", Nutritional_status))
+meta_cheno <- meta_cheno %>%
+  mutate(SIMPLE_NUTSTAT = "")
+meta_cheno$SIMPLE_NUTSTAT[which(meta_cheno$Nutritional_status=="stunted")] <- "S"
+meta_cheno$SIMPLE_NUTSTAT[which(meta_cheno$Nutritional_status=="non-stunted")] <- "N"
+
+tax_otu <-cbind(tax_cheno, otu_cheno)
+tax_otu$Name <- str_c(tax_otu$Kingdom, '_',tax_otu$Phylum, '_', tax_otu$Class, '_', tax_otu$Order, '_', tax_otu$Family)
+tax_otu[, 98] <- as.character(tax_otu[, 98])
+rownames(tax_otu) <- tax_otu[,98]
+tax_otu <- tax_otu[,-c(1:7,98)]
+tax_otu <- t(tax_otu)
+class(tax_otu) <- "numeric"
+tax_otu <- as.data.frame(tax_otu)
+dist <- vegdist(tax_otu[, 1:90],  method = "bray")
+PCOA <- pcoa(dist)
+vectorPCOA <- cbind(PCOA$vectors[, 1:2])
+vectorPCOA <- as.data.frame(PCOA$vectors[, 1:2])
+
+# Arrows and taxa name
+env.fit <- envfit(vectorPCOA, tax_otu[,1:90], perm = 999)
+#Warning: the standard deviation is zero
+env.fit.sig  <- as.data.frame(scores(env.fit, display = "vectors"))
+env.fit.vect <- as.list(env.fit$vectors)
+coordinates <- cbind(as.data.frame(env.fit.vect$arrows*sqrt(env.fit.vect$r)), as.data.frame(env.fit.vect$pvals))
+coordinates_sign <- subset(coordinates, as.data.frame(env.fit.vect$pvals) <= 0.05)
+coordinates_sign <- cbind(coordinates_sign, species = rownames(coordinates_sign))
+arr_pvals_coord <- coordinates_sign %>%
+  mutate(Coord = (Axis.1*Axis.1)+(Axis.2*Axis.2))
+arr_pvals_coord[,5] <- as.numeric(arr_pvals_coord[,5])
+df_envfit <- scores(env.fit,display=c("vectors"))
+df_envfit <- df_envfit*vegan:::ordiArrowMul(df_envfit)
+df_envfit <- as.data.frame(df_envfit)
+df_envfit$species <- rownames(df_envfit)
+df_envfit <- df_envfit %>% 
+  filter(species %in% coordinates_sign$species)
+arrows_names <- str_split_fixed(df_envfit$species, "_", 5)
+arrows_names <- as.data.frame(arrows_names)
+df_envfit <- df_envfit %>% 
+  mutate(species_names = arrows_names$V5)
+
+# Plotting
+ft.scores <- as.data.frame(vectorPCOA)
+ft.scores$fastqID <- rownames(tax_otu)
+which(rownames(meta_cheno) != rownames(ft.scores))
+ft.scores$Bile_acids_Concentration <- meta_cheno$Bile_acids_Concentration
+ft.scores$SIC <- meta_cheno$SIC_NUT_STAT
+ft.scores$SNU <- meta_cheno$SIMPLE_NUTSTAT
+ft.scores$SNU <- meta_cheno$SIMPLE_NUTSTAT
+ft.scores.d <- distinct(ft.scores)
+per_explained <- 100*PCOA$values$Relative_eig / sum(PCOA$values$Relative_eig)
+per_explained <- round(per_explained[1:2], digits = 1)
+labs <- c(glue("Axis1 [{per_explained[1]}%]"),
+          glue("Axis2 [{per_explained[2]}%]"))
+centroid <- ft.scores.d %>%
+  group_by(SIC, Bile_acids_Concentration, SNU) %>%
+  summarise(axis1 = mean(Axis.1),
+            axis2 = mean(Axis.2), .groups = "drop")
+
+centroid_1 <- centroid %>%
+  filter(Bile_acids_Concentration == "Control" | Bile_acids_Concentration == "Chenodeoxycholic acid 0.25")
+centroid_2 <- centroid %>%
+  filter(Bile_acids_Concentration == "Chenodeoxycholic acid 0.25" | Bile_acids_Concentration == "Chenodeoxycholic acid 0.5")
+
+```
+
+```{r}
+figS11a <- ggplot() +
+   geom_point(aes(x=centroid$axis1, y= centroid$axis2, color = centroid$SIC, shape = centroid$Bile_acids_Concentration),size = 3, show.legend = TRUE) +
+  geom_line(aes(x=centroid_1$axis1, y= centroid_1$axis2,color = centroid_1$SIC, group = centroid_1$SIC),
+              arrow = arrow(angle = 10, ends = "first", length = unit(0.1, "inches"), type="closed")) +
+  geom_line(aes(x=centroid_2$axis1, y= centroid_2$axis2, color = centroid_2$SIC, group = centroid_2$SIC), 
+            arrow = arrow(angle = 10, ends = "first", length = unit(0.1, "inches"),type="closed")) +
+  geom_text(aes(x=centroid$axis1, y= centroid$axis2, label = centroid$SNU), colour = "white", size = 2) +
+  scale_color_manual(values = pal_SIC, name = "SIC", guide = "none") +
+  scale_shape_manual(limits = c("Control", "Chenodeoxycholic acid 0.25", "Chenodeoxycholic acid 0.5"), values=c(15:17), name = "") +
+  geom_segment(aes(x = 0, y = 0, xend = df_envfit$Axis.1*0.5,yend = df_envfit$Axis.2*0.5),
+            arrow = arrow(length = unit(0.2, "cm")),color="#808080",alpha=0.5) +
+  geom_text(aes(df_envfit$Axis.1*0.52, df_envfit$Axis.2*0.52, label = df_envfit$species_names, fontface=3), color="#303030", size=2) +
+  ggtitle("") +
+  xlab(labs[1]) +
+  ylab(labs[2]) +
+  theme_bw() + 
+  theme(legend.position = "bottom", 
+        axis.title=element_text(size=8,family = "sans"), 
+        axis.text = element_text(size=8,family = "sans"),
+        legend.text = element_text(size=8,family = "sans"),
+        legend.title = element_text(size=8,family = "sans"))
+
+pdf("../Figure_panels/FigureS11A.pdf", width = 9, height = 7)
+print(figS11a)
+dev.off()
+
+write.csv(rbind(centroid, centroid_1, centroid_2), "../Source_data/FigureS11a1.csv")
+write.csv(df_envfit, "../Source_data/FigureS11a2.csv")
+```
+
+## Fig S11B
+Lefse
+```{r}
+ps_lefse_Cdc_025 <- subset_samples(ps_Cdc_fam, Bile_acids =="Control" | Bile_acids_Concentration == "Chenodeoxycholic acid 0.25")
+lef_out_Cdc_025 <- run_lefse(ps_lefse_Cdc_025, wilcoxon_cutoff = 0.01, group = "Bile_acids_Concentration",
+                              taxa_rank = "Family", kw_cutoff = 0.05, norm = "CPM", multigrp_strat = TRUE, lda_cutoff = 2)
+
+figS11b1 <- plot_ef_bar(lef_out_Cdc_025) +
+  theme(legend.position = "right", axis.title=element_text(size=8,family = "sans"), 
+        axis.text.y = element_text(size=8,face = 3, family = "sans"),
+        axis.text.x = element_text(size=8, family = "sans"),
+        legend.text = element_text(size=6,family = "sans"),
+        legend.direction = "vertical",
+        legend.title = element_text(size=6,family = "sans")) +
+  scale_fill_manual(values = c("#E87D72","#00BFC4"))
+
+
+ps_lefse_Cdc_05 <- subset_samples(ps_Cdc_fam, Bile_acids =="Control" | Bile_acids_Concentration == "Chenodeoxycholic acid 0.5")
+lef_out_Cdc_05 <- run_lefse(ps_lefse_Cdc_05, wilcoxon_cutoff = 0.01, group = "Bile_acids_Concentration",
+                              taxa_rank = "Family", kw_cutoff = 0.05, norm = "CPM", multigrp_strat = TRUE, lda_cutoff = 2)
+
+figS11b2 <- plot_ef_bar(lef_out_Cdc_05) +
+  theme(legend.position = "right", axis.title=element_text(size=8,family = "sans"), 
+        axis.text.y = element_text(size=8,face = 3, family = "sans"),
+        axis.text.x = element_text(size=8, family = "sans"),
+        legend.text = element_text(size=6,family = "sans"),
+        legend.direction = "vertical",
+        legend.title = element_text(size=6,family = "sans")) +
+  scale_fill_manual(values = c("#E87D72","#00BFC4"))
+
+pdf("../Figure_panels/FigureS11B.pdf", width = 5, height = 6 )
+grid.arrange(figS11b1, figS11b2, ncol = 1)
+dev.off()
+
+source_data_S11B <- rbind(as.matrix(marker_table(lef_out_Cdc_025)), as.matrix(marker_table(lef_out_Cdc_05)))
+write.csv2(source_data_S11B, "../Source_data/FigureS11B.csv")
+```
+## Fig S11C
+```{r}
+Cdc_marker_table <- rbind(marker_table(lef_out_Cdc_025), marker_table(lef_out_Cdc_05))
+ps_Cdc_fam_sign <- subset_taxa(ps_Cdc_fam, Family %in% unique(Cdc_marker_table$feature[which(Cdc_marker_table$ef_lda >2)]))
+ps_Cdc_fam_sign_m <- psmelt(ps_Cdc_fam_sign)
+ps_Cdc_fam_sign_m <- dplyr::left_join(ps_Cdc_fam_sign_m, Cdc_dataM, by= "Bile_acids_Concentration")
+# Absolute abundance calculation
+ps_Cdc_fam_sign_m <- ps_Cdc_fam_sign_m %>%
+  mutate(Abs_abundance = Abundance * DNA_concentration)
+ps_Cdc_fam_sign_abs  <- ps_Cdc_fam_sign_m[,-3] 
+ps_Cdc_fam_sign_abs <- ps_Cdc_fam_sign_abs[,c(1,2,24, 3:23)]
+colnames(ps_Cdc_fam_sign_abs)[3] <- "Abundance"
+ps_Cdc_fam_sign_abs <- ps_Cdc_fam_sign_abs %>%
+  mutate(RelAbs = "Absolute abundance")
+# Relative
+ps_Cdc_fam_sign_rel <- ps_Cdc_fam_sign_m
+ps_Cdc_fam_sign_rel <- ps_Cdc_fam_sign_rel[,-25]
+ps_Cdc_fam_sign_rel <- ps_Cdc_fam_sign_rel %>%
+  mutate(RelAbs = "Relative abundance")
+
+# Find the order
+Cdc_fam_rel_order <- ps_Cdc_fam_sign_rel %>% 
+  group_by(Family) %>%
+  summarise(MeanAbundance = mean(Abundance))
+Cdc_fam_rel_order <- Cdc_fam_rel_order[order(Cdc_fam_rel_order$MeanAbundance, decreasing = TRUE),]
+
+# Merge
+ps_Cdc_fam_sign_m <- rbind(ps_Cdc_fam_sign_rel, ps_Cdc_fam_sign_abs)
+
+unique(ps_Cdc_fam_sign_m$Family) # 22 Families split in 2x11
+ps_Cdc_fam_sign_m_1 <- ps_Cdc_fam_sign_m %>% filter(Family %in% Cdc_fam_rel_order$Family[1:11])
+ps_Cdc_fam_sign_m_2 <- ps_Cdc_fam_sign_m %>% filter(Family %in% Cdc_fam_rel_order$Family[12:22])
+
+figS11c_1 <- suppressWarnings(ggplot(ps_Cdc_fam_sign_m_1, aes(x=Tacids_num, y=Abundance)) +
+  geom_point(aes(shape=Nutritional_status), colour = "black", size = 1.5) +
+  geom_point(aes(shape= Nutritional_status, color = SIC), size =1) +
+  geom_smooth(aes(shape = Nutritional_status, color = SIC, fill = SIC), linewidth = 0.3, se = FALSE) +
+  scale_fill_manual(values = pal_SIC) +
+  scale_color_manual(values = pal_SIC) +
+  scale_shape_discrete(name = "Nutritional status", labels = c("non-stunted", "stunted")) +
+  scale_x_continuous(breaks=1:length(Cdc_acidM.levels), labels=Cdc_acidM.levels) +
+  ggh4x::facet_grid2(factor(RelAbs, 
+                            levels = c("Relative abundance", "Absolute abundance") ) ~ factor(Family, levels = unique(Cdc_fam_rel_order$Family)),
+                     scales = "free", independent = "y", switch = "y") +
+  theme_bw() +
+  theme(legend.position = "none", axis.title=element_blank(),
+        strip.text.x = element_text( size = 7, face = "italic", family = "sans"),
+        axis.text.x =  element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.text.y = element_text(size = 8, family = "sans"),
+        strip.placement = "outside",
+        strip.text.y.left= element_text( size = 8, family = "sans"),
+        legend.text = element_blank()))
+
+figS11c_2 <- suppressWarnings(ggplot(ps_Cdc_fam_sign_m_2, aes(x=Tacids_num, y=Abundance)) +
+  geom_point(aes(shape=Nutritional_status), colour = "black", size = 1.5) +
+  geom_point(aes(shape= Nutritional_status, color = SIC), size =1) +
+  geom_smooth(aes(shape = Nutritional_status, color = SIC, fill = SIC), linewidth = 0.3, se = FALSE) +
+  scale_fill_manual(values = pal_SIC) +
+  scale_color_manual(values = pal_SIC) +
+  scale_shape_discrete(name = "Nutritional status", labels = c("non-stunted", "stunted")) +
+  scale_x_continuous(breaks=1:length(Cdc_acidM.levels), labels=Cdc_acidM.levels) +
+  ggh4x::facet_grid2(factor(RelAbs, 
+                            levels = c("Relative abundance", "Absolute abundance") ) ~ factor(Family, levels = unique(Cdc_fam_rel_order$Family)),
+                     scales = "free", independent = "y", switch = "y") +
+  theme_bw() +
+  theme(legend.position = "bottom", axis.title=element_blank(),
+        strip.text.x = element_text( size = 7, face = "italic", family = "sans"),
+        axis.text.x =  element_text(angle = 45, hjust = 1, size = 8, family = "sans"),
+        axis.text.y = element_text(size = 8, family = "sans"),
+        strip.placement = "outside",
+        panel.spacing.x = unit(0.8, "lines"),
+        strip.text.y.left= element_text( size = 8, family = "sans"),
+        legend.text = element_text(size=8,family = "sans"),
+        legend.title = element_text(size=8,family = "sans")) +
+  guides(fill=guide_legend(nrow=2)))
+
+pdf("../Figure_panels/FigureS11C.pdf", width = 15, height = 8 )
+suppressWarnings(grid.arrange(figS11c_1, figS11c_2, ncol = 1, heights = c(2,3)))
+dev.off()
+
+source_data_S11C <- ps_Cdc_fam_sign_m %>% select(SIC, Bile_acids_Concentration, Tacids_num, Abundance, Nutritional_status)
+
+write_csv2(source_data_S11C, "../Source_data/FigureS11C.csv")
+
+```
+
+
+
+# Fig S12
+Taurochenodeoxycholic acid
+## Fig S12A
+PCoA
+```{r}
+OTU_taucheno = as(otu_table(ps_Tcdc_fam), "matrix")
+otu_taucheno <- as.data.frame(OTU_taucheno)
+TAX_taucheno = as(tax_table(ps_Tcdc_fam), "matrix")
+tax_taucheno <- as.data.frame(TAX_taucheno)
+META_taucheno = as(sample_data(ps_Tcdc_fam), "matrix")
+meta_taucheno <- as.data.frame(META_taucheno)
+meta_taucheno <- meta_taucheno %>%
+  mutate(SIC_NUT_STAT = str_c(SIC, "_", Nutritional_status))
+meta_taucheno <- meta_taucheno %>%
+  mutate(SIMPLE_NUTSTAT = "")
+meta_taucheno$SIMPLE_NUTSTAT[which(meta_taucheno$Nutritional_status=="stunted")] <- "S"
+meta_taucheno$SIMPLE_NUTSTAT[which(meta_taucheno$Nutritional_status=="non-stunted")] <- "N"
+tax_otu <-cbind(tax_taucheno, otu_taucheno)
+
+tax_otu$Name <- str_c(tax_otu$Kingdom, '_',tax_otu$Phylum, '_', tax_otu$Class, '_', tax_otu$Order, '_', tax_otu$Family)
+tax_otu[, 128] <- as.character(tax_otu[, 128])
+length(unique(tax_otu[,128]))
+rownames(tax_otu) <- tax_otu[,128]
+tax_otu <- tax_otu[,-c(1:7,128)]
+tax_otu <- t(tax_otu)
+class(tax_otu) <- "numeric"
+tax_otu <- as.data.frame(tax_otu)
+dist <- vegdist(tax_otu[, 1:120],  method = "bray")
+PCOA <- pcoa(dist)
+vectorPCOA <- as.data.frame(PCOA$vectors[, 1:2])
+
+# Arrows and taxa name
+env.fit <- envfit(vectorPCOA, tax_otu[,1:120], perm = 999) 
+env.fit.sig  <- as.data.frame(scores(env.fit, display = "vectors"))
+env.fit.vect <- as.list(env.fit$vectors)
+coordinates <- cbind(as.data.frame(env.fit.vect$arrows*sqrt(env.fit.vect$r)), as.data.frame(env.fit.vect$pvals))
+coordinates_sign <- subset(coordinates, as.data.frame(env.fit.vect$pvals) <= 0.05)
+coordinates_sign <- cbind(coordinates_sign, species = rownames(coordinates_sign))
+arr_pvals_coord <- coordinates_sign %>%
+  mutate(Coord = (Axis.1*Axis.1)+(Axis.2*Axis.2))
+arr_pvals_coord[,5] <- as.numeric(arr_pvals_coord[,5])
+df_envfit <- scores(env.fit,display=c("vectors"))
+df_envfit <- df_envfit*vegan:::ordiArrowMul(df_envfit)
+df_envfit <- as.data.frame(df_envfit)
+df_envfit$species <- rownames(df_envfit)
+df_envfit <- df_envfit %>% 
+  filter(species %in% coordinates_sign$species)
+arrows_names <- str_split_fixed(df_envfit$species, "_", 5)
+arrows_names <- as.data.frame(arrows_names)
+df_envfit <- df_envfit %>% 
+  mutate(species_names = arrows_names$V5)
+
+# Plotting
+ft.scores <- as.data.frame(vectorPCOA)
+ft.scores$fastqID <- rownames(tax_otu)
+which(rownames(meta_taucheno) != rownames(ft.scores))
+ft.scores$Bile_acids_Concentration <- meta_taucheno$Bile_acids_Concentration
+ft.scores$SIC <- meta_taucheno$SIC_NUT_STAT
+ft.scores$SNU <- meta_taucheno$SIMPLE_NUTSTAT
+ft.scores$SNU <- meta_taucheno$SIMPLE_NUTSTAT
+ft.scores.d <- distinct(ft.scores)
+per_explained <- 100*PCOA$values$Relative_eig / sum(PCOA$values$Relative_eig)
+per_explained <- round(per_explained[1:2], digits = 1)
+labs <- c(glue("Axis1 [{per_explained[1]}%]"),
+          glue("Axis2 [{per_explained[2]}%]"))
+
+centroid <- ft.scores.d %>%
+  group_by(SIC, Bile_acids_Concentration, SNU) %>%
+  summarise(axis1 = mean(Axis.1),
+            axis2 = mean(Axis.2), .groups = "drop")
+centroid_1 <- centroid %>%
+  filter(Bile_acids_Concentration == "Control" | Bile_acids_Concentration == "Taurochenodeoxycholic acid 0.25")
+centroid_2 <- centroid %>%
+  filter(Bile_acids_Concentration == "Taurochenodeoxycholic acid 0.25" | Bile_acids_Concentration == "Taurochenodeoxycholic acid 0.5")
+centroid_3 <- centroid %>%
+  filter(Bile_acids_Concentration == "Taurochenodeoxycholic acid 0.5" | Bile_acids_Concentration == "Taurochenodeoxycholic acid 1")
+```
+
+```{r}
+figS12a <- ggplot() +
+   geom_point(aes(x=centroid$axis1, y= centroid$axis2,color = centroid$SIC, shape = centroid$Bile_acids_Concentration),size = 3, show.legend = TRUE) +
+  geom_line(aes(x=centroid_1$axis1, y= centroid_1$axis2, color = centroid_1$SIC, group = centroid_1$SIC)) +
+  geom_line(aes(x=centroid_2$axis1, y= centroid_2$axis2, color = centroid_2$SIC, group = centroid_2$SIC)) +
+  geom_line(aes(x=centroid_3$axis1, y= centroid_3$axis2, color = centroid_3$SIC, group = centroid_3$SIC)) +
+  geom_text(aes(x=centroid$axis1, y= centroid$axis2,label = centroid$SNU), colour = "white", size = 2) +
+  scale_color_manual(values = pal_SIC, name = "SIC", guide = "none") +
+  scale_shape_manual(limits = c("Control", "Taurochenodeoxycholic acid 0.25", "Taurochenodeoxycholic acid 0.5",
+                                "Taurochenodeoxycholic acid 1"), values=c(15:18), name = "Bile Acid") +
+  geom_segment(aes(x = 0, y = 0, xend = df_envfit$Axis.1*0.5,yend = df_envfit$Axis.2*0.5),
+            arrow = arrow(length = unit(0.2, "cm")),color="#808080",alpha=0.5) +
+  geom_text(aes(df_envfit$Axis.1*0.52, df_envfit$Axis.2*0.52, label = df_envfit$species_names, fontface=3), color="#303030",size=2) +
+  ggtitle("") +
+  xlab(labs[1]) +
+  ylab(labs[2]) +
+  theme_bw() + 
+  theme(legend.position = "bottom", 
+        axis.title=element_text(size=8,family = "sans"), 
+        axis.text = element_text(size=8,family = "sans"),
+        legend.text = element_text(size=8,family = "sans"),
+        legend.title = element_text(size=8,family = "sans"))
+
+pdf("../Figure_panels/FigureS12A.pdf", width = 9, height = 7)
+print(figS12a)
+dev.off()
+
+write.csv(rbind(centroid, centroid_1, centroid_2, centroid_3), "../Source_data/FigureS12a1.csv")
+write.csv(df_envfit, "../Source_data/FigureS12a2.csv")
+```
+
+## Fig S12B
+Lefse
+```{r}
+ps_Tcdc_fam_025 <- subset_samples(ps_Tcdc_fam, Bile_acids =="Control" | Bile_acids_Concentration == "Taurochenodeoxycholic acid 0.25")
+lef_out_Tcdc_025 <- run_lefse(ps_Tcdc_fam_025, wilcoxon_cutoff = 0.01, group = "Bile_acids_Concentration",
+                              taxa_rank = "Family", kw_cutoff = 0.05, norm = "CPM", multigrp_strat = TRUE, lda_cutoff = 2)
+
+figS12b1 <- plot_ef_bar(lef_out_Tcdc_025) +
+  theme(legend.position = "right", axis.title=element_text(size=8,family = "sans"), 
+        axis.text.y = element_text(size=8,face = 3, family = "sans"),
+        axis.text.x = element_text(size=8, family = "sans"),
+        legend.text = element_text(size=6,family = "sans"),
+        legend.direction = "vertical",
+        legend.title = element_text(size=6,family = "sans")) +
+  scale_fill_manual(values = c("#E87D72","#00BFC4"))
+
+
+ps_Tcdc_fam_05 <- subset_samples(ps_Tcdc_fam, Bile_acids =="Control" | Bile_acids_Concentration == "Taurochenodeoxycholic acid 0.5")
+lef_out_Tcdc_05 <- run_lefse(ps_Tcdc_fam_05, wilcoxon_cutoff = 0.01, group = "Bile_acids_Concentration",
+                              taxa_rank = "Family", kw_cutoff = 0.05, norm = "CPM", multigrp_strat = TRUE, lda_cutoff = 2)
+
+figS12b2 <- plot_ef_bar(lef_out_Tcdc_05) +
+  theme(legend.position = "right", axis.title=element_text(size=8,family = "sans"), 
+        axis.text.y = element_text(size=8,face = 3, family = "sans"),
+        axis.text.x = element_text(size=8, family = "sans"),
+        legend.text = element_text(size=6,family = "sans"),
+        legend.direction = "vertical",
+        legend.title = element_text(size=6,family = "sans")) +
+  scale_fill_manual(values = c("#E87D72","#00BFC4"))
+
+
+ps_lefse_Tcdc_1 <- subset_samples(ps_Tcdc_fam, Bile_acids =="Control" | Bile_acids_Concentration == "Taurochenodeoxycholic acid 1")
+lef_out_Tcdc_1 <- run_lefse(ps_lefse_Tcdc_1, wilcoxon_cutoff = 0.01, group = "Bile_acids_Concentration",
+                              taxa_rank = "Family", kw_cutoff = 0.05, norm = "CPM", multigrp_strat = TRUE, lda_cutoff = 2)
+
+figS12b3 <- plot_ef_bar(lef_out_Tcdc_1) +
+  theme(legend.position = "right", axis.title=element_text(size=8,family = "sans"), 
+        axis.text.y = element_text(size=8,face = 3, family = "sans"),
+        axis.text.x = element_text(size=8, family = "sans"),
+        legend.text = element_text(size=6,family = "sans"),
+        legend.direction = "vertical",
+        legend.title = element_text(size=6,family = "sans")) +
+  scale_fill_manual(values = c("#E87D72","#00BFC4"))
+
+pdf("../Figure_panels/FigureS12B.pdf", width = 5, height = 9 )
+grid.arrange(figS12b1, figS12b2, figS12b3, ncol = 1)
+dev.off()
+
+source_data_S12B <- rbind(as.matrix(marker_table(lef_out_Tcdc_025)), as.matrix(marker_table(lef_out_Tcdc_05)), as.matrix(marker_table(lef_out_Tcdc_1)))
+write.csv2(source_data_S12B, "../Source_data/FigureS12B.csv")
+```
+## Fig S12C
+```{r}
+Tcdc_marker_table <- rbind(marker_table(lef_out_Tcdc_025), marker_table(lef_out_Tcdc_05), marker_table(lef_out_Tcdc_1))
+ps_Tcdc_fam_sign <- subset_taxa(ps_Tcdc_fam, Family %in% unique(Tcdc_marker_table$feature[which(Tcdc_marker_table$ef_lda >2)]))
+ps_Tcdc_fam_sign_m <- psmelt(ps_Tcdc_fam_sign)
+ps_Tcdc_fam_sign_m <- dplyr::left_join(ps_Tcdc_fam_sign_m, Tcdc_dataM, by= "Bile_acids_Concentration")
+
+# Absolute abundance calculation
+ps_Tcdc_fam_sign_m <- ps_Tcdc_fam_sign_m %>%
+  mutate(Abs_abundance = Abundance * DNA_concentration)
+# Absolute
+ps_Tcdc_fam_sign_abs  <- ps_Tcdc_fam_sign_m[,-3] 
+ps_Tcdc_fam_sign_abs <- ps_Tcdc_fam_sign_abs[,c(1,2,24, 3:23)]
+colnames(ps_Tcdc_fam_sign_abs)[3] <- "Abundance"
+ps_Tcdc_fam_sign_abs <- ps_Tcdc_fam_sign_abs %>%
+  mutate(RelAbs = "Absolute abundance")
+# Relative
+ps_Tcdc_fam_sign_rel <- ps_Tcdc_fam_sign_m
+ps_Tcdc_fam_sign_rel <- ps_Tcdc_fam_sign_rel[,-25]
+ps_Tcdc_fam_sign_rel <- ps_Tcdc_fam_sign_rel %>%
+  mutate(RelAbs = "Relative abundance")
+
+# Find the order
+Tcdc_fam_rel_order <- ps_Tcdc_fam_sign_rel %>% 
+  group_by(Family) %>%
+  summarise(MeanAbundance = mean(Abundance))
+Tcdc_fam_rel_order <- Tcdc_fam_rel_order[order(Tcdc_fam_rel_order$MeanAbundance, decreasing = TRUE),]
+
+# Merge
+ps_Tcdc_fam_sign_m <- rbind(ps_Tcdc_fam_sign_rel, ps_Tcdc_fam_sign_abs)
+
+unique(ps_Tcdc_fam_sign_m$Family) # 22 Families split in 2x11
+ps_Tcdc_fam_sign_m_1 <- ps_Tcdc_fam_sign_m %>% filter(Family %in% Tcdc_fam_rel_order$Family[1:11])
+ps_Tcdc_fam_sign_m_2 <- ps_Tcdc_fam_sign_m %>% filter(Family %in% Tcdc_fam_rel_order$Family[12:22])
+
+
+figS12c_1 <- suppressWarnings(ggplot(ps_Tcdc_fam_sign_m_1, aes(x=Tacids_num, y=Abundance)) +
+  geom_point(aes(shape=Nutritional_status), colour = "black", size = 1.5) +
+  geom_point(aes(shape= Nutritional_status, color = SIC), size =1) +
+  geom_smooth(aes(shape = Nutritional_status, color = SIC, fill = SIC), linewidth = 0.3, se = FALSE) +
+  scale_fill_manual(values = pal_SIC) +
+  scale_color_manual(values = pal_SIC) +
+  scale_shape_discrete(name = "Nutritional status", labels = c("non-stunted", "stunted")) +
+  scale_x_continuous(breaks=1:length(Tcdc_acidM.levels), labels=Tcdc_acidM.levels) +
+  ggh4x::facet_grid2(factor(RelAbs, 
+                            levels = c("Relative abundance", "Absolute abundance") ) ~ factor(Family, levels = unique(Tcdc_fam_rel_order$Family)),
+                     scales = "free", independent = "y", switch = "y") +
+  theme_bw() +
+  theme(legend.position = "none", axis.title=element_blank(),
+        strip.text.x = element_text( size = 7, face = "italic", family = "sans"),
+        axis.text.x =  element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.text.y = element_text(size = 8, family = "sans"),
+        strip.placement = "outside",
+        strip.text.y.left= element_text( size = 8, family = "sans"),
+        legend.text = element_blank()))
+
+figS12c_2 <- suppressWarnings(ggplot(ps_Tcdc_fam_sign_m_2, aes(x=Tacids_num, y=Abundance)) +
+  geom_point(aes(shape=Nutritional_status), colour = "black", size = 1.5) +
+  geom_point(aes(shape= Nutritional_status, color = SIC), size =1) +
+  geom_smooth(aes(shape = Nutritional_status, color = SIC, fill = SIC), linewidth = 0.3, se = FALSE) +
+  scale_fill_manual(values = pal_SIC) +
+  scale_color_manual(values = pal_SIC) +
+  scale_shape_discrete(name = "Nutritional status", labels = c("non-stunted", "stunted")) +
+  scale_x_continuous(breaks=1:length(Tcdc_acidM.levels), labels=Tcdc_acidM.levels) +
+  ggh4x::facet_grid2(factor(RelAbs, 
+                            levels = c("Relative abundance", "Absolute abundance") ) ~ factor(Family, levels = unique(Tcdc_fam_rel_order$Family)),
+                     scales = "free", independent = "y", switch = "y") +
+  theme_bw() +
+  theme(legend.position = "bottom", axis.title=element_blank(),
+        strip.text.x = element_text( size = 7, face = "italic", family = "sans"),
+        axis.text.x =  element_text(angle = 60, hjust = 1, size = 8, family = "sans"),
+        axis.text.y = element_text(size = 8, family = "sans"),
+        strip.placement = "outside",
+        panel.spacing.x = unit(0.8, "lines"),
+        strip.text.y.left= element_text( size = 8, family = "sans"),
+        legend.text = element_text(size=8,family = "sans"),
+        legend.title = element_text(size=8,family = "sans")) +
+  guides(fill=guide_legend(nrow=2)))
+
+pdf("../Figure_panels/FigureS12C.pdf", width = 16, height = 8 )
+suppressWarnings(grid.arrange(figS12c_1, figS12c_2, ncol = 1, heights = c(2,3.5)))
+dev.off()
+
+
+source_data_S12C <- ps_Tcdc_fam_sign_m %>% select(SIC, Bile_acids_Concentration, Tacids_num, Abundance, Nutritional_status)
+
+write_csv2(source_data_S12C, "../Source_data/FigureS12C.csv")
+```
+

@@ -1,0 +1,3526 @@
+---
+title: "Bile acids Clinical Factors associations"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#Setup
+library(dplyr)
+library(ggplot2)
+library(ggbiplot)
+library(factoextra)
+library(readstata13)
+library(sva) #combat!
+library(tidyr)
+library(vegan)
+library(rstatix) #'get summary stats'
+library(viridis) #colours for heatmap
+library(ggpubr)
+
+#functions
+impute=function(x){
+  x[is.na(x)] =min(x, na.rm=TRUE)/2 #convert the NA values to half the minimum from the column, these were 7 initially
+  x #display the column
+}
+```
+
+## Bile Acids Analysis
+```{r data preprocessing}
+# File not provided
+data_bile = readstata13::read.dta13(
+  "BileacidsandmetadataOct20v2.dta", encoding = "latin1" ) %>%
+  dplyr::mutate( pays = factor( pays
+                                , levels = 1:2
+                                , labels = c("Madagascar","CAR"))
+                 , Analysisround = factor( Analysisround
+                                           , levels = c(1,2,3,4) # correct the mistaken '#4' to '#3'
+                                           , labels = c(1,2,3,3) ) 
+                 , stunted = factor( stunted
+                                     , levels= 1:0
+                                     , labels = c("stunted","non-stunted") )
+                 # , sexe = factor(sexe, labels = c("Male","Female"), levels = c("Masculin","FÃ©minin"))
+                 , sibo = (UFCml >= 200000)
+                 , age_years = cut( age
+                                    , breaks = c(24, 36, 48, 61)
+                                    , labels = c("2-3 years","3-4 years","4-5 years")
+                                    , include.lowest = TRUE
+                                    , right = TRUE
+                                    , dig.lab = 5
+                                    , ordered_result = TRUE )
+                 , dplyr::across( .cols = c("anemie","sibo","haz","haz2")
+                                  ,.fns = as.factor )
+  ) %>%
+  dplyr::filter( !SampleType %in% c("internalcontrol", "" ) & stunted != "" ) %>%
+  dplyr::rename( #Country  = pays,
+    calpro = calprotectinelevel
+    , aat    = alphaantitrypsinlevel
+    , anemia = anemie
+    , batch  = Analysisround ) %>%
+  #-- removing observations not supposed to exist
+  dplyr::filter( !((SampleType == "Duodenal" | SampleType == 'Gastric') & stunted == "non-stunted" ))
+
+###_- then turning to lowercase
+colnames(data_bile) = colnames(data_bile) %>%
+  tolower() %>%
+  gsub("sulfate", "sul", . ) %>%
+  gsub("dexy", "deoxy", . ) %>%
+  gsub("glucuronide","gluc", .)
+
+#- add a category lithoderivatives
+lithoderivatives<-unique(colnames(data_bile)[grep( pattern = "litho", colnames(data_bile))])
+lithoderivatives_r<-unique(lithoderivatives[grep( pattern = "_r", lithoderivatives)])
+data_bile$lithoderivatives_r = rowSums(data_bile[colnames(data_bile) %in% lithoderivatives_r])
+
+#- add a category urso
+urso<-unique(colnames(data_bile)[grep( pattern = "urso", colnames(data_bile))])
+urso_r<-unique(urso[grep( pattern = "_r", urso)])
+data_bile$urso_r = rowSums(data_bile[colnames(data_bile) %in% urso_r])
+
+#-- fixing column capitalization
+colnames(data_bile)[ colnames(data_bile) == "sampletype"] = "SampleType"
+
+#--correct the mistaken 'batch 4' to 'batch 3'
+data_bile$batch[which(data_bile$batch==4)] <- 3 
+
+#-- metadata columns
+meta_cols = colnames(data_bile)[c( 1:833, 999) ]
+Meta      = data_bile %>% dplyr::select( all_of( meta_cols ) ) #take metadata only
+
+#-- bile acid columns
+bile_cols = colnames(data_bile)[c( 834:998, 1000:1007) ]
+bile_acids      = data_bile %>% dplyr::select( all_of( bile_cols ) ) #take bile acid data only
+
+#--- only the relative abundance columns
+acids_rel_abund_col = colnames(data_bile)[ grep(pattern = "_r", colnames(data_bile))]
+acids_rel_abund_col <- setdiff(acids_rel_abund_col, meta_cols) #remove accidental metadata
+acids_rel_abund = data_bile %>% dplyr::select( all_of( bile_cols ) ) #take rel abundance bile acid data only
+
+#--- only the NON relative abundance columns - absolute numbers for revisions as per reviewer #3 Q2
+acids_abund_col = colnames(data_bile)[c(834:913, 915:916)] #bad solution for picking columns
+acids_abund_col <- setdiff(acids_abund_col, meta_cols) #remove accidental metadata
+acids_abund = data_bile %>% dplyr::select( all_of( acids_abund_col ) ) #take rel abundance bile acid data only
+
+#--- only the ratios
+acids_ratio_col = colnames(data_bile)[ grep(pattern = "ratio", colnames(data_bile))]
+acids_ratio = data_bile %>% dplyr::select( all_of( acids_ratio_col ) ) #take rel abundance bile acid data only
+
+#--- only the grouped as relative abundance
+bile_grouped_cols = colnames(data_bile)[c( 990:998, 1006:1007)]
+bile_acids_grouped      = data_bile %>% dplyr::select( all_of( bile_grouped_cols ) ) #take bile acid data only
+
+#only the single bile acids, no categories!
+single_bile_acids <- setdiff(acids_rel_abund_col, bile_grouped_cols)
+single_bile_acids
+
+#--- main tables
+X        = data_bile %>% dplyr::select( all_of(c( acids_rel_abund_col, meta_cols ) )) %>%
+  group_by(SampleType) %>%
+  filter(!duplicated(id)) %>% #for most downstream analyses, remove the technical duplicates
+  ungroup()
+X_grouped = data_bile %>% dplyr::select( all_of(c( bile_grouped_cols, meta_cols ) ))
+X_ratio = data_bile %>% dplyr::select( all_of(c( acids_ratio_col, meta_cols ) ))
+
+
+X_CAR= dplyr::filter(X, pays == "CAR")
+X_Mada= dplyr::filter(X, pays == "Madagascar")
+
+#subsets by sample type
+feces  = dplyr::filter(X, SampleType == "Feces")
+feces2 = dplyr::filter(feces, haz2!=1) #to compare only NN and MCS
+
+duodenal = dplyr::filter(X, SampleType=="Duodenal")
+gastric = dplyr::filter(X, SampleType=="Gastric")
+
+feces_CAR = dplyr::filter(X, (SampleType=="Feces" & pays=="CAR"))
+feces2_CAR = dplyr::filter(feces_CAR, haz2!=1) #to compare only NN and MCS
+feces_Mada = dplyr::filter(X, (SampleType=="Feces" & pays=="Madagascar"))
+feces2_Mada = dplyr::filter(feces_Mada, haz2!=1) #to compare only NN and MCS
+
+duodenal_CAR = dplyr::filter(X, (SampleType=="Duodenal" & pays=="CAR"))
+duodenal_Mada = dplyr::filter(X, (SampleType=="Duodenal" & pays=="Madagascar"))
+gastric_CAR= dplyr::filter(X, (SampleType=="Gastric" & pays=="CAR"))
+gastric_Mada = dplyr::filter(X, (SampleType=="Gastric" & pays=="Madagascar"))
+
+#check sample size by group
+length(feces$id)
+length(duodenal$id)
+length(gastric$id)
+
+#count for flowchart
+dplyr::count(feces, pays, stunted)
+dplyr::count(duodenal, pays, stunted)
+dplyr::count(gastric, pays, stunted)
+
+#are there any samples missing bile acids data entirely? 
+bile_acids_nozeroes <- bile_acids
+bile_acids[is.na(bile_acids_nozeroes)] <- 0
+bile_acids_nozeroes[which(rowSums(bile_acids_nozeroes)==0),] #no they all have something
+
+```
+
+```{r Fig S2 batch effects}
+#For quantification and correction of batch effects, please see alternative markdown for now.
+#BA_BatchEffects.Rmd
+```
+
+##########
+Little issue here with 1A, it does not correspond to the figure panel we have in the ms
+#########
+
+# Figure 1
+```{r Fig 1A}
+##Fig 1 A-C : Differences in Bile Acids by SampleType
+#A: PCoA WITHOUT combat correction
+#X = all the bile acids from the full data_bile set.
+RelAbundsingle<- X %>% dplyr::select(all_of(single_bile_acids)) #take only the single bile acids
+
+#consider NAs to be zero
+# now impute the values which are NA or 0
+RelAbundsingle[RelAbundsingle<=0] <- NA # first convert all negative or 0 values in NA
+RelAbundsingle=data.frame(apply(RelAbundsingle,2,impute)) #and then impute them as half the minimum value (instead of zero)
+dim(RelAbundsingle)
+RelAbundsingle_log<-log10(RelAbundsingle)
+RelAbundsingle_log<-as.data.frame(RelAbundsingle_log) 
+
+#corresponding metadata 
+RelAbundsingle.meta <- X %>% dplyr::select(all_of(meta_cols))
+
+amp.pca.raw <- prcomp(RelAbundsingle_log, scale=TRUE)
+summary(amp.pca.raw)
+amp.pca.raw$x[1]
+
+eig.val <- get_eigenvalue(amp.pca.raw)
+eig.val$variance.percent
+
+RelAbundsingle.meta$SampleType <- factor(RelAbundsingle.meta$SampleType, levels=c("Gastric", "Duodenal", "Feces"))
+
+#pdf("plots/1A_PCA_sampletype_precombatlog.pdf", width=6, height=5)
+p <- ggbiplot(amp.pca.raw,ellipse=FALSE,var.axes=FALSE) 
+#groups=ft.df.meta$SampleType, show.legend=FALSE)
+p <- p + geom_point(aes(fill=RelAbundsingle.meta$SampleType), 
+                    shape=21, size=5, colour="black") + 
+  ggtitle("Bile Acids") + 
+  theme_bw(base_size=16) + 
+  labs(fill="Sample Type") + 
+  xlab(paste("PC1 (", round(eig.val$variance.percent[1], 1), "%)", sep="")) + 
+  ylab(paste("PC2 (", round(eig.val$variance.percent[2], 1), "%)", sep="")) +
+  annotate('text', x=0.5, y=-2.5, label=c("p<0.001"))
+p
+#dev.off()
+
+#pdf("plots/S1B_PCA_batch_precombatlog.pdf", width=6.5, height=4.5)
+p1 <- ggbiplot(amp.pca.raw,ellipse=FALSE,var.axes=FALSE) + geom_point(aes(fill=RelAbundsingle.meta$batch), 
+                    shape=21, size=5, colour="black") + 
+  ggtitle("Bile Acids") + 
+  theme_bw(base_size=16) + 
+  labs(fill="Batch") + 
+  xlab(paste("PC1 (", round(eig.val$variance.percent[1], 1), "%)", sep="")) + 
+  ylab(paste("PC2 (", round(eig.val$variance.percent[2], 1), "%)", sep="")) +
+  annotate('text', x=0.5, y=-2.5, label=c("p<0.001"))
+
+Fig1A <- p
+pdf("../../Figure_panels/Figure1A.pdf", height = 5, width = 6)
+Fig1A
+dev.off()
+
+pcs <- amp.pca.raw$x[, 1:2]
+sdev <- amp.pca.raw$sdev[1:2]
+
+fig1A_df <- data.frame(sample = RelAbundsingle.meta$id,
+                        PC1 = pcs[, 1] / sdev[1],
+                        PC2 = pcs[, 2] / sdev[2],
+                        batch = RelAbundsingle.meta$SampleType)
+
+write.csv2(fig1A_df, "../../Source_data/Figure1A.csv")
+
+#significance by sample type
+#adonis(RelAbundsingle_log ~ batch + SampleType, 
+#       data = X, method='eu', sqrt.dist = FALSE)
+
+#For a table - summary statistics
+
+#Summary stats - whole dataset
+X_grouped %>% get_summary_stats(primarymain_r, type = "median_iqr")
+X_grouped %>% get_summary_stats(conjugated_r, type = "median_iqr")
+X_grouped %>% get_summary_stats(gluco_r, type = "median_iqr")
+X_grouped %>% get_summary_stats(glyco_r, type = "median_iqr")
+X_grouped %>% get_summary_stats(sulfo_r, type = "median_iqr")
+X_grouped %>% get_summary_stats(tauro_r, type = "median_iqr")
+X_grouped %>% get_summary_stats(lithoderivatives_r, type = "median_iqr")
+
+#Summary stats - Gastric
+X_groupedGastric<-filter(X_grouped, SampleType=="Gastric")
+X_groupedGastric %>% get_summary_stats(primarymain_r, type = "median_iqr")
+X_groupedGastric %>% get_summary_stats(conjugated_r, type = "median_iqr")
+X_groupedGastric %>% get_summary_stats(gluco_r, type = "median_iqr")
+X_groupedGastric %>% get_summary_stats(glyco_r, type = "median_iqr")
+X_groupedGastric %>% get_summary_stats(sulfo_r, type = "median_iqr")
+X_groupedGastric %>% get_summary_stats(tauro_r, type = "median_iqr")
+X_groupedGastric %>% get_summary_stats(lithoderivatives_r, type = "median_iqr")
+
+#Summary stats - duodenal
+X_groupedDuodenal<-filter(X_grouped, SampleType=="Duodenal")
+X_groupedDuodenal %>% get_summary_stats(primarymain_r, type = "median_iqr")
+X_groupedDuodenal %>% get_summary_stats(conjugated_r, type = "median_iqr")
+X_groupedDuodenal %>% get_summary_stats(gluco_r, type = "median_iqr")
+X_groupedDuodenal %>% get_summary_stats(glyco_r, type = "median_iqr")
+X_groupedDuodenal %>% get_summary_stats(sulfo_r, type = "median_iqr")
+X_groupedDuodenal %>% get_summary_stats(tauro_r, type = "median_iqr")
+X_groupedDuodenal %>% get_summary_stats(lithoderivatives_r, type = "median_iqr")
+
+#Summary stats - feces
+X_groupedFeces<-filter(X_grouped, SampleType=="Feces")
+X_groupedFeces %>% get_summary_stats(primarymain_r, type = "median_iqr")
+X_groupedFeces %>% get_summary_stats(conjugated_r, type = "median_iqr")
+X_groupedFeces %>% get_summary_stats(gluco_r, type = "median_iqr")
+X_groupedFeces %>% get_summary_stats(glyco_r, type = "median_iqr")
+X_groupedFeces %>% get_summary_stats(sulfo_r, type = "median_iqr")
+X_groupedFeces %>% get_summary_stats(tauro_r, type = "median_iqr")
+X_groupedFeces %>% get_summary_stats(lithoderivatives_r, type = "median_iqr")
+
+```
+
+```{r Fig 1BCD}
+#Test for differences by sample type used a repeated wilcoxen with FDR correction.
+
+# All main bile acid caterogies by Sample Type
+# First - uncorrected, by check via glm + batch. #Second - on combat corrected dataset itself.
+X_grouped$SampleType <- factor(X_grouped$SampleType, levels = c("Gastric", "Duodenal", "Feces"))
+X_ratio$SampleType <- factor(X_ratio$SampleType, levels = c("Gastric", "Duodenal", "Feces"))
+
+#Primary bile acids by sample type. Uncorrected values.
+one.way <- kruskal.test(primarymain_r ~ SampleType, data = X_grouped)
+one.way #highly significant <2e-16 ***
+
+model <- lm(primarymain_r ~ batch + SampleType, data=X_grouped)
+summary(model)
+
+p <- ggplot(X_grouped, aes(y=primarymain_r, x=SampleType)) + geom_boxplot(outlier.shape=NA) + geom_jitter(width=0.1, height=0)
+p <- p + theme(panel.background = element_blank(), axis.line = element_line(colour = "black"),
+               axis.title.y = element_text(margin = margin(r = 10)))
+p <- p + xlab("Sample Type") + ylab("Relative abundance (%)") + ggtitle("Primary Bile Acids")
+p <- p + annotate('segment', x=1, xend=3, y=105, yend=105)
+p <- p + annotate('text', label='***', x=2, y=110)
+Figure1C <- p
+
+pdf("../../Figure_panels/Figure1C.pdf", height = 3, width = 3)
+Figure1C
+dev.off()
+
+source_data_1C <- X_grouped %>% select(primarymain_r, SampleType)
+
+write.csv2(source_data_1C, "../../Source_data/Figure1C.csv")
+```
+
+```{r}
+#Secondary bile acids by sample type. Uncorrected values.
+one.way <- kruskal.test(secondarymain_r ~ SampleType, data = X_grouped)
+one.way #highly significant <2e-16 ***
+
+model <- lm(secondarymain_r ~ batch + SampleType, data=X_grouped)
+summary(model)
+
+p <- ggplot(X_grouped, aes(y=secondarymain_r, x=SampleType)) + geom_boxplot(outlier.shape=NA) + geom_jitter(width=0.1, height=0)
+p <- p + theme(panel.background = element_blank(), axis.line = element_line(colour = "black"),
+               axis.title.y = element_text(margin = margin(r = 10)))
+p <- p + xlab("Sample Type") + ylab("Relative abundance (%)") + ggtitle("Secondary Bile Acids")
+p <- p + annotate('segment', x=1, xend=3, y=105, yend=105)
+p <- p + annotate('text', label='***', x=2, y=110)
+Figure1D <- p
+
+pdf("../../Figure_panels/Figure1D.pdf", height = 3, width = 3)
+Figure1D
+dev.off()
+
+source_data_1D <- X_grouped %>% select(secondarymain_r, SampleType)
+
+write.csv2(source_data_1D, "../../Source_data/Figure1D.csv")
+```
+
+```{r}
+#Conjugated bile acids
+one.way <- kruskal.test(conjugated_r ~ SampleType, data = X_grouped)
+one.way #highly significant <2e-16 ***
+
+model <- lm(conjugated_r ~ batch + SampleType, data=X_grouped)
+summary(model)
+
+p <- ggplot(X_grouped, aes(y=conjugated_r, x=SampleType)) + geom_boxplot(outlier.shape=NA) + geom_jitter(width=0.1, height=0)
+p <- p + theme(panel.background = element_blank(), axis.line = element_line(colour = "black"),
+               axis.title.y = element_text(margin = margin(r = 10)))
+p <- p + xlab("Sample Type") + ylab("Relative abundance (%)") + ggtitle("Conjugated Bile Acids")
+p <- p + annotate('segment', x=1, xend=3, y=105, yend=105)
+p <- p + annotate('text', label='***', x=2, y=110)
+Figure1E <- p
+
+pdf("../../Figure_panels/Figure1E.pdf", height = 3, width = 3)
+Figure1E
+dev.off()
+
+source_data_1E <- X_grouped %>% select(conjugated_r, SampleType)
+
+write.csv2(source_data_1E, "../../Source_data/Figure1E.csv")
+```
+
+```{r}
+#Unonjugated bile acids
+one.way <- kruskal.test(unconjugated_r ~ SampleType, data = X_grouped)
+one.way #highly significant <2e-16 ***
+
+model <- lm(unconjugated_r ~ batch + SampleType, data=X_grouped)
+summary(model)
+
+p <- ggplot(X_grouped, aes(y=unconjugated_r, x=SampleType)) + geom_boxplot(outlier.shape=NA) + geom_jitter(width=0.1, height=0)
+p <- p + theme(panel.background = element_blank(), axis.line = element_line(colour = "black"),
+               axis.title.y = element_text(margin = margin(r = 10)))
+p <- p + xlab("Sample Type") + ylab("Relative abundance (%)") + ggtitle("Unconjugated Bile Acids")
+p <- p + annotate('segment', x=1, xend=3, y=105, yend=105)
+p <- p + annotate('text', label='***', x=2, y=110)
+Figure1F <- p
+
+pdf("../../Figure_panels/Figure1F.pdf", height = 3, width = 3)
+Figure1F
+dev.off()
+
+source_data_1F <- X_grouped %>% select(unconjugated_r, SampleType)
+
+write.csv2(source_data_1F, "../../Source_data/Figure1F.csv")
+```
+
+```{r}
+#make a heatmap of all the single bile acids by sample type.
+#first: summarize the mean value of each bile acid per sample type (?)
+to_summarize <- X %>% dplyr::select(all_of(single_bile_acids)) #start again with single
+to_summarize[is.na(to_summarize)] <- 0 #0 is 0, no NAs
+to_summarize$SampleType <- X$SampleType #add back grouping variable
+AverageBySampleType <- to_summarize %>% group_by(SampleType) %>% summarize_all(mean)
+AverageBySampleType #nice :) 
+AverageBySampleType <- AverageBySampleType %>% pivot_longer(cols=c(2:length(names(AverageBySampleType))),
+                                                            names_to="Bile_Acid", values_to="Relative_Abundance")
+AverageBySampleType #double nice :) 
+AverageBySampleType <- AverageBySampleType[order(AverageBySampleType$Relative_Abundance),]
+AverageBySampleType$SampleType <- factor(AverageBySampleType$SampleType, levels=c("Gastric", "Duodenal", "Feces"))
+top_bile_acids <- AverageBySampleType %>% filter(Relative_Abundance>=1)
+pdata <- AverageBySampleType %>% filter(Bile_Acid %in% top_bile_acids$Bile_Acid)
+AverageBySampleType_Gastric <- AverageBySampleType %>% filter(SampleType=="Gastric")
+pdata$Bile_Acid <- factor(pdata$Bile_Acid, levels=AverageBySampleType_Gastric$Bile_Acid)
+
+p <- ggplot(pdata, aes(x=SampleType, y=Bile_Acid, fill=log(Relative_Abundance))) + geom_tile(colour='black')
+p <- p + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+p <- p + xlab(NULL) + ylab(NULL)
+p <- p + scale_fill_viridis()
+#p <- p + scale_fill_gradient2(low="dodgerblue3", mid="lightgreen", high="firebrick2")
+p <- p + labs(fill="Log Rel. Abund.") + ggtitle("Major Bile Acids")
+
+
+#--- REVISED VERSION Fig 1B: same heatmap, with a sidebar annotating primary vs secondary bile acids ---
+#Classification below follows standard bile acid biochemistry (Ridlon et al. 2006, J Lipid Res):
+#"Primary" = made directly by the host liver from cholesterol (cholic acid, chenodeoxycholic acid,
+#and the muricholic acids, plus their glycine/taurine/sulfate/glucuronide conjugates).
+#"Secondary" = produced by gut bacteria modifying primary bile acids (7-dehydroxylation, oxidation,
+#epimerization - e.g. deoxycholic acid, lithocholic acid, ursodeoxycholic acid, and their
+#derivatives/conjugates).
+#NOTE: a handful of these calls are genuinely debated in the literature (e.g. dehydrocholic acid,
+#the hyocholic-acid family, and lambda-muricholic acid) - please double check this list against
+#however primarymain_r/secondarymain_r were originally defined, and edit the vector below if needed.
+#redone, Kelsey, based on what is actually in the text of the manuscript & the figure.
+bile_acid_class <- c(
+  glycocholic_acid_r               = "Primary",
+  glycochenodeoxycholic_acid_r     = "Primary",
+  glycodeoxycholic_acid_r          = "Secondary",
+  taurochenodeoxycholic_acid_r     = "Primary",
+  taurocholic_acid_r               = "Primary",
+  taurochenodeoxycholic_acid3sul_r = "Primary",
+  cholic_acid_r                    = "Primary",
+  deoxycholic_acid_r               = "Secondary",
+  chenodeoxycholic_acid_r          = "Primary",
+  glycolithocholic_acid3sul_r      = "Secondary",
+  lithocholic_acid_r               = "Secondary",
+  twelveketolithocholic_acid_r     = "Secondary",
+  isolithocholic_acid_r            = "Secondary",
+  ursocholic_acid_r                = "Secondary",
+  ursodeoxycholic_acid_r           = "Secondary",
+  apocholic_acid_r                 = "Secondary",
+  dehydrolithocholic_acid_r        = "Secondary",
+  ursodeoxycholic_acid3sul_r       = "Secondary"
+)
+
+#one row per bile acid actually shown in the heatmap, in the same order as the heatmap y-axis
+sidebar_data <- pdata %>% dplyr::distinct(Bile_Acid)
+sidebar_data$Class <- bile_acid_class[as.character(sidebar_data$Bile_Acid)]
+sidebar_data$Class[is.na(sidebar_data$Class)] <- "Unclassified" #safety net if a new bile acid ever shows up
+table(sidebar_data$Class, useNA="ifany") #check nothing fell through as Unclassified
+
+p_sidebar <- ggplot(sidebar_data, aes(x=1, y=Bile_Acid, fill=Class)) + geom_tile(colour='black')
+p_sidebar <- p_sidebar + scale_fill_manual(values=c(Primary="black", Secondary="grey80", Unclassified="white"), drop=FALSE)
+p_sidebar <- p_sidebar + theme(axis.text.x = element_blank(), axis.text.y = element_blank(),
+                                axis.ticks = element_blank(), panel.background = element_blank(),
+                                legend.key.size = unit(0.4,"cm"), legend.text=element_text(size=9),
+                                legend.title=element_text(size=10))
+p_sidebar <- p_sidebar + xlab(NULL) + ylab(NULL) + labs(fill="Bile Acid Type")
+
+p_combined <- ggarrange(p_sidebar, p, ncol=2, widths=c(0.35, 1), align="h")
+
+figure_1B <- p_combined
+
+pdf("../../Figure_panels/Figure1B.pdf", height = 3, width = 3)
+figure_1B
+dev.off()
+
+write.csv2(pdata, "../../Source_data/Figure1B.csv")
+
+
+
+#and now: test which ones are significantly different by sample type.
+#first: do a repeated kruskal-wallis similar to before.
+df_kw <- X %>% dplyr::select(all_of(single_bile_acids)) #start again with single bile acids
+df_kw[is.na(df_kw)] <- 0 #0 is 0, no NAs
+
+#test each column (apply 2) by sample type
+MW.p = apply(df_kw,2,
+             function(x) kruskal.test(c(x)~X$SampleType)$p.value)
+p.res = data.frame(Bile_Acid=names(df_kw),MW.p)
+# Perform multiple comparison correction using a given method of choice
+p.res$rel.fdr <- p.adjust(p.res$MW.p, method="fdr")
+p.res$bonferroni <- p.adjust(p.res$MW.p, method="bonferroni") 
+p.res[order(p.res$bonferroni),]
+p.res.hits <- p.res %>% filter(bonferroni<0.05)
+dim(p.res.hits)
+
+#and now do that but with linear models so we can adjust for batch.
+MW.lm = apply(df_kw,2,
+              function(x) summary(lm(c(x)~X$batch + X$SampleType))$coefficients)
+MW.lm 
+#this technically works but I guess the question is, what do we really want here...
+#each column is the list of first the estimate, then std error, then t value, and the last 5 are p-values for X$batch2, X$batch3, X$SampleTypeFeces, X$SampleTypeGastric
+#for example, for the first bile acid:
+summary(lm(df_kw$allocholic_acid3sul_r~X$batch + X$SampleType))$coefficients
+#taking [4,4] gets us the p-value for feces vs duodenum
+summary(lm(df_kw$allocholic_acid3sul_r~X$batch + X$SampleType))$coefficients[4,4]
+```
+
+# Fig. S3
+## Fig S3A
+```{r}
+#Gastric only. 
+RelAbundsingle_G<-gastric %>% dplyr::select(all_of(acids_rel_abund_col))
+RelAbundsingle_G<-RelAbundsingle_G[,!(colSums(RelAbundsingle_G, na.rm=TRUE)==0)] #remove all-zero bile acids
+#save a list of bile acids which are RARE in that compartment, to exclude later (post PCA/combat)
+rareG <- RelAbundsingle_G[,which(colSums(RelAbundsingle_G==0)>(length(RelAbundsingle_G$allocholic_acid3sul_r)*0.8))] #less than 20% prevalent i.e. more than 80% zeroes, e.g. more than 748 zeros out of 935
+dim(RelAbundsingle_G) #75 bile acids
+dim(rareG) #5 rare bile acids that are >80% zeros / <20% prevalent
+names(rareG)
+
+RelAbundsingle_G[RelAbundsingle_G<=0] <- NA # first convert all negative or 0 values in NA
+RelAbundsingle_G=data.frame(apply(RelAbundsingle_G,2,impute)) 
+dim(RelAbundsingle_G)
+
+RelAbundsingle_G_log<-log10(RelAbundsingle_G)
+RelAbundsingle_G_log<-as.data.frame(RelAbundsingle_G_log) 
+
+#add back the metadata for combat
+RelAbundsingle_G.meta <- gastric %>% dplyr::select(all_of(meta_cols))
+combat_input_G <- data.frame(RelAbundsingle_G_log, RelAbundsingle_G.meta)
+
+mod = model.matrix(~pays, data=combat_input_G)
+batch=combat_input_G$batch
+
+RelAbundsingle_G_log_t <- as.data.frame(t(RelAbundsingle_G_log)) #transpose it for ComBat
+
+bile_combat_output_G <- ComBat(dat=RelAbundsingle_G_log_t, mod=mod, batch=batch) 
+bile_combat_output_G_t <- as.data.frame(t(bile_combat_output_G))
+
+bile_combat_output_G_meta <- data.frame(bile_combat_output_G_t, RelAbundsingle_G.meta)
+
+#before PCA: take only the single bile acids #any_of because some were removed by filtering already
+bile_combat_output_G_t_single <- bile_combat_output_G_t %>% dplyr::select(any_of(single_bile_acids))
+
+amp.pca.combat.G <- prcomp(bile_combat_output_G_t_single, scale=TRUE)
+summary(amp.pca.combat.G)
+amp.pca.combat.G$x[1]
+
+eig.val <- get_eigenvalue(amp.pca.combat.G)
+eig.val$variance.percent
+
+pg <- ggbiplot(amp.pca.combat.G,ellipse=FALSE,var.axes=FALSE) 
+pg <- pg + geom_point(aes(fill=bile_combat_output_G_meta$pays), shape=21, size=5, colour="black") +
+  ggtitle("Gastric") + 
+  theme_bw(base_size=16) + 
+  labs(fill="Country") + 
+  xlab(paste("PC1 (", round(eig.val$variance.percent[1], 1), "%)", sep="")) + 
+  ylab(paste("PC2 (", round(eig.val$variance.percent[2], 1), "%)", sep="")) +
+    annotate("text", label=c("p=0.15"), x=-3.5, y=-1.8)
+figS3A <- pg
+
+pdf("../../Figure_panels/FigureS3A.pdf", height = 4, width = 6)
+figS3A
+dev.off()
+
+pcs <- amp.pca.combat.G$x[, 1:2]
+sdev <- amp.pca.combat.G$sdev[1:2]
+
+figS3A_df <- data.frame(sample = bile_combat_output_G_meta$id,
+                        PC1 = pcs[, 1] / sdev[1],
+                        PC2 = pcs[, 2] / sdev[2],
+                        batch = bile_combat_output_G_meta$pays)
+
+write.csv2(figS3A_df, "../../Source_data/FigureS3A.csv")
+
+#significance by country, gas
+adonis2(bile_combat_output_G_t ~ batch + pays, 
+       data = bile_combat_output_G_meta, method='eu', sqrt.dist = FALSE) #p=0.073
+#significance by country, gas - using ComBat but not also correcting for batch
+adonis2(bile_combat_output_G_t ~ pays, 
+       data = bile_combat_output_G_meta, method='eu', sqrt.dist = FALSE) #p=0.087 or 0.069, it varies because no seed was set
+#WITHOUT combat but on similarly processed data.
+adonis2(RelAbundsingle_G_log ~ batch + pays, 
+       data = combat_input_G, method='eu', sqrt.dist = FALSE) #p=0.082 so also kind of similar regardless of method used
+#WITHOUT combat on original data, not log transformed.
+adonis2(RelAbundsingle_G ~ batch + pays, 
+       data = combat_input_G, method='eu', sqrt.dist = FALSE) #p=0.256 #hm okay maybe this was the difference
+```
+## Fig S3B
+```{r}
+#Duodenum only. 
+RelAbundsingle_D<-duodenal %>% dplyr::select(all_of(acids_rel_abund_col))
+RelAbundsingle_D<-RelAbundsingle_D[,!(colSums(RelAbundsingle_D, na.rm=TRUE)==0)] #remove all-zero bile acids
+#save a list of bile acids which are RARE in that compartment, to exclude later (post PCA/combat)
+rareD <- RelAbundsingle_G[,which(colSums(RelAbundsingle_G==0)>(length(RelAbundsingle_G$allocholic_acid3sul_r)*0.8))] #less than 20% prevalent i.e. more than 80% zeroes, e.g. more than 748 zeros out of 935
+dim(RelAbundsingle_G) #75 bile acids
+dim(rareD) #5 rare bile acids that are >80% zeros / <20% prevalent
+names(rareD)
+
+RelAbundsingle_D[RelAbundsingle_D<=0] <- NA # first convert all negative or 0 values in NA
+RelAbundsingle_D=data.frame(apply(RelAbundsingle_D,2,impute)) 
+dim(RelAbundsingle_D)
+
+RelAbundsingle_D_log<-log10(RelAbundsingle_D)
+RelAbundsingle_D_log<-as.data.frame(RelAbundsingle_D_log) 
+
+#add back the metadata for combat
+RelAbundsingle_D.meta <- duodenal %>% dplyr::select(all_of(meta_cols))
+combat_input_D <- data.frame(RelAbundsingle_D_log, RelAbundsingle_D.meta)
+
+mod = model.matrix(~pays, data=combat_input_D)
+batch=combat_input_D$batch
+
+RelAbundsingle_D_log_t <- as.data.frame(t(RelAbundsingle_D_log)) #transpose it for ComBat
+
+bile_combat_output_D <- ComBat(dat=RelAbundsingle_D_log_t, mod=mod, batch=batch) 
+bile_combat_output_D_t <- as.data.frame(t(bile_combat_output_D))
+
+bile_combat_output_D_meta <- data.frame(bile_combat_output_D_t, RelAbundsingle_D.meta)
+
+#before PCA: take only the single bile acids #any_of because some were removed by filtering already
+bile_combat_output_D_t_single <- bile_combat_output_D_t %>% dplyr::select(any_of(single_bile_acids))
+
+amp.pca.combat.D <- prcomp(bile_combat_output_D_t_single, scale=TRUE)
+summary(amp.pca.combat.D)
+amp.pca.combat.D$x[1]
+
+eig.val <- get_eigenvalue(amp.pca.combat.D)
+eig.val$variance.percent
+
+#pdf("plots/S3B_PCA_country_duodenum_combat.pdf", width=6, height=4)
+pd <- ggbiplot(amp.pca.combat.D,ellipse=FALSE,var.axes=FALSE) 
+pd <- pd + geom_point(aes(fill=bile_combat_output_D_meta$pays), shape=21, size=5, colour="black") + 
+  ggtitle("Duodenal") + 
+  theme_bw(base_size=16) + 
+  labs(fill="Country") + 
+  xlab(paste("PC1 (", round(eig.val$variance.percent[1], 1), "%)", sep="")) + 
+  ylab(paste("PC2 (", round(eig.val$variance.percent[2], 1), "%)", sep="")) +
+  annotate("text", label=c("p=0.15"), x=1.9, y=-2)
+figS3B <- pd
+
+pdf("../../Figure_panels/FigureS3B.pdf", height = 4, width = 6)
+figS3B
+dev.off()
+
+pcs <- amp.pca.combat.D$x[, 1:2]
+sdev <- amp.pca.combat.D$sdev[1:2]
+
+figS3B_df <- data.frame(sample = bile_combat_output_D_meta$id,
+                        PC1 = pcs[, 1] / sdev[1],
+                        PC2 = pcs[, 2] / sdev[2],
+                        batch = bile_combat_output_D_meta$pays)
+
+write.csv2(figS3B_df, "../../Source_data/FigureS3B.csv")
+
+#significance by country, duo
+#adonis(bile_combat_output_D_t ~ batch + pays, 
+#       data = bile_combat_output_D_meta, method='eu', sqrt.dist = FALSE) #p=0.002 hm. that's not what we had before. did I use differently transformed data for the adonis, ex. int he other batch effects file?
+#significance by country, duo - using ComBat but not also correcting for batch
+adonis2(bile_combat_output_D_t ~ pays, 
+       data = bile_combat_output_D_meta, method='eu', sqrt.dist = FALSE) #p=0.001
+#WITHOUT combat but on similarly processed data (log transformed)
+#adonis(RelAbundsingle_D_log ~ batch + pays, 
+#       data = combat_input_D, method='eu', sqrt.dist = FALSE) #p=0.003
+#WITHOUT combat on original data, not log transformed.
+adonis2(RelAbundsingle_D ~ batch + pays, 
+       data = combat_input_D, method='eu', sqrt.dist = FALSE) #p=0.1 #hm okay yes maybe this was the difference.
+
+# Add coord_fixed() to ensure the aspect ratio is fixed for all plots
+pf <- pf + coord_fixed(ratio=1)
+pd <- pd + coord_fixed(ratio=1)
+pg <- pg + coord_fixed(ratio=1.4) #because it's more rectangular
+
+##arrange the PCAs more nicely in a row of 3
+#pdf(width=10, height=5, "plots/2ABC_pcas_wpvalues.pdf")
+#ggarrange(pg, pd, pf, ncol=3, nrow=1, 
+#          widths=c(1,1,1),
+#          heights=c(1,1,1),
+#          common.legend=TRUE, legend='right')
+#dev.off()
+
+```
+## Fig S3C
+```{r Fig S3 ABC combat correct BY sample type (country PCAs)}
+#feces combat correction
+#A: PCoA plus combat correction #update: do it on all bile acids, remove grouped ones later
+#X = all the bile acids from the full data_bile set.
+RelAbundsingle_F <-feces %>% dplyr::select(all_of(acids_rel_abund_col)) #take single bile acids from FECES
+#remove bile acids that don't exist in that compartment
+RelAbundsingle_F<-RelAbundsingle_F[,!(colSums(RelAbundsingle_F, na.rm=TRUE)==0)]
+#save a list of bile acids which are RARE in that compartment, to exclude later (post PCA/combat)
+rareF <- RelAbundsingle_F[,which(colSums(RelAbundsingle_F==0)>(length(RelAbundsingle_F$allocholic_acid3sul_r)*0.8))] #less than 20% prevalent i.e. more than 80% zeroes, e.g. more than 748 zeros out of 935
+dim(RelAbundsingle_F) #73 bile acids
+dim(rareF) #4 rare bile acids that are >80% zeros / <20% prevalent
+names(rareF)
+
+# now impute remaining values which are NA or 0
+RelAbundsingle_F[RelAbundsingle_F<=0] <- NA # first convert all negative or 0 values in NA
+RelAbundsingle_F=data.frame(apply(RelAbundsingle_F,2,impute)) 
+
+#View(RelAbundsingle_F)
+dim(RelAbundsingle_F)
+
+RelAbundsingle_F_log<-log10(RelAbundsingle_F)
+RelAbundsingle_F_log<-as.data.frame(RelAbundsingle_F_log) 
+
+#add back the metadata for combat
+RelAbundsingle_F.meta <- feces %>% dplyr::select(all_of(meta_cols))
+combat_input_F <- data.frame(RelAbundsingle_F_log, RelAbundsingle_F.meta)
+
+mod = model.matrix(~pays+as.factor(stunted), data=combat_input_F)
+batch=combat_input_F$batch
+
+RelAbundsingle_F_log_t <- as.data.frame(t(RelAbundsingle_F_log)) #transpose it for ComBat
+
+bile_combat_output_F <- ComBat(dat=RelAbundsingle_F_log_t, mod=mod, batch=batch) 
+bile_combat_output_F_t <- as.data.frame(t(bile_combat_output_F))
+
+bile_combat_output_F_meta <- data.frame(bile_combat_output_F_t, RelAbundsingle_F.meta)
+
+#before PCA: take only the single bile acids #any_of because some were removed by filtering already
+bile_combat_output_F_t_single <- bile_combat_output_F_t %>% dplyr::select(any_of(single_bile_acids))
+
+amp.pca.combat.F <- prcomp(bile_combat_output_F_t_single, scale=TRUE)
+summary(amp.pca.combat.F)
+amp.pca.combat.F$x[1]
+
+eig.val <- get_eigenvalue(amp.pca.combat.F)
+eig.val$variance.percent
+
+RelAbundsingle_F.meta$SampleType <- factor(RelAbundsingle_F.meta$SampleType, 
+                                         levels=c("Gastric", "Duodenal", "Feces"))
+
+pf <- ggbiplot(amp.pca.combat.F,ellipse=FALSE,var.axes=FALSE) 
+pf <- pf + geom_point(aes(fill=bile_combat_output_F_meta$pays), shape=21, size=5, colour="black") +
+  ggtitle("Feces") + 
+  theme_bw(base_size=16) + 
+  labs(fill="Country") + 
+  xlab(paste("PC1 (", round(eig.val$variance.percent[1], 1), "%)", sep="")) + 
+  ylab(paste("PC2 (", round(eig.val$variance.percent[2], 1), "%)", sep="")) +
+  annotate("text", label=c("p=0.001"), x=-1.25, y=-4)
+figS3C <- pf
+
+pdf("../../Figure_panels/FigureS3C.pdf", height = 4, width = 6)
+figS3C
+dev.off()
+
+pcs <- amp.pca.combat.F$x[, 1:2]
+sdev <- amp.pca.combat.F$sdev[1:2]
+
+figS3C_df <- data.frame(sample = bile_combat_output_F_meta$id,
+                        PC1 = pcs[, 1] / sdev[1],
+                        PC2 = pcs[, 2] / sdev[2],
+                        batch = bile_combat_output_F_meta$pays)
+
+write.csv2(figS3C_df, "../../Source_data/FigureS3C.csv")
+
+#significance by country, feces
+adonis2(bile_combat_output_F_t ~ batch + pays, 
+       data = bile_combat_output_F_meta, method='eu', sqrt.dist = FALSE) #p=0.001
+#significance by country, feces - using ComBat but not also correcting for batch, because that seems redundant. why did I do that?
+adonis2(bile_combat_output_F_t ~ pays, 
+       data = bile_combat_output_F_meta, method='eu', sqrt.dist = FALSE) #p=0.001 so it doesn't matter
+#WITHOUT combat but on similarly processed data.
+#adonis(RelAbundsingle_F_log ~ batch + pays, 
+#       data = combat_input_F, method='eu', sqrt.dist = FALSE) #p=0.001, so it also doesn't matter.
+#WITHOUT combat on original data, not log transformed.
+#adonis(RelAbundsingle_F ~ batch + pays, 
+#       data = combat_input_F, method='eu', sqrt.dist = FALSE) #p=0.0.001 great.
+```
+
+```{r testing dataframes}
+#first, exclude rare bile acids, post combat correction
+df_feces <- bile_combat_output_F_t %>% select(-any_of(names(rareF)))
+dim(df_feces) #69 bile acids left
+identical(df_feces$allocholic_acid3sul_r, bile_combat_output_F_meta$allocholic_acid3sul_r) #confirm order ok
+
+df_gas <- bile_combat_output_G_t %>% select(-any_of(names(rareG)))
+dim(df_gas) #70 bile acids left
+identical(df_gas$allocholic_acid3sul_r, bile_combat_output_G_meta$allocholic_acid3sul_r) #confirm order ok
+
+df_duo <- bile_combat_output_D_t %>% select(-any_of(names(rareD)))
+dim(df_gas) #70 bile acids left
+identical(df_gas$allocholic_acid3sul_r, bile_combat_output_G_meta$allocholic_acid3sul_r) #confirm order ok
+
+#for linear models, non combat
+#first, exclude rare bile acids, PRE combat correction but POST log transformation
+df_fecesLM <- RelAbundsingle_F_log %>% select(-any_of(names(rareF)))
+dim(df_fecesLM) #69 bile acids left
+identical(df_fecesLM$allocholic_acid3sul_r, combat_input_F$allocholic_acid3sul_r) #confirm order ok
+
+df_gasLM <- RelAbundsingle_G_log %>% select(-any_of(names(rareG)))
+dim(df_gasLM) #70 bile acids left
+identical(df_gasLM$allocholic_acid3sul_r, combat_input_G$allocholic_acid3sul_r) #confirm order ok
+
+df_duoLM <- RelAbundsingle_D_log %>% select(-any_of(names(rareD)))
+dim(df_duoLM) #70 bile acids left
+identical(df_duoLM$allocholic_acid3sul_r, combat_input_D$allocholic_acid3sul_r) #confirm order ok
+```
+
+```{r Fig S3 repeated testing by country}
+##perform repeated wilcoxen by country within sample type. (combat-adjusted data.)
+#feces
+MW.p.feces.adj = apply(df_feces,2,
+                 function(x) wilcox.test(c(x)~bile_combat_output_F_meta$pays)$p.value)
+MW.p.feces.res = apply(df_feces,2,
+                 function(x) wilcox.test(c(x)~bile_combat_output_F_meta$pays)$statistic) #add for revisions
+p.res.adj.f = data.frame(Bile_Acid=names(MW.p.feces.adj),
+                         pval=MW.p.feces.adj,
+                         coef=MW.p.feces.res,
+                         SampleType=c("Feces"),
+                         Test=c("Wilcoxon_combat"),
+                         Outcome=c("Country"))
+# Perform multiple comparison correction using a given method of choice
+p.res.adj.f$qval <- p.adjust(p.res.adj.f$pval, method="fdr")
+p.res.adj.f.hits <- p.res.adj.f %>% filter(qval<0.05)
+p.res.adj.f.hits
+dim(p.res.adj.f.hits)
+
+#duodenum
+MW.p.duo.adj = apply(df_duo,2,
+                       function(x) wilcox.test(c(x)~bile_combat_output_D_meta$pays)$p.value)
+MW.p.duo.res = apply(df_duo,2,
+                 function(x) wilcox.test(c(x)~bile_combat_output_D_meta$pays)$statistic) #add for revisions
+p.res.adj.d = data.frame(Bile_Acid=names(MW.p.duo.adj),
+                         pval=MW.p.duo.adj,
+                         coef=MW.p.duo.res,
+                         SampleType=c("Duodenal"),
+                         Test=c("Wilcoxon_combat"),
+                          Outcome=c("Country"))
+# Perform multiple comparison correction using a given method of choice
+p.res.adj.d$qval <- p.adjust(p.res.adj.d$pval, method="fdr")
+p.res.adj.d.hits <- p.res.adj.d %>% filter(qval<0.05)
+p.res.adj.d.hits
+dim(p.res.adj.d.hits)
+
+#gastric
+MW.p.gas.adj = apply(df_gas,2,
+                     function(x) wilcox.test(c(x)~bile_combat_output_G_meta$pays)$p.value)
+MW.p.gas.res = apply(df_gas,2,
+                 function(x) wilcox.test(c(x)~bile_combat_output_G_meta$pays)$statistic) #add for revisions
+p.res.adj.g = data.frame(Bile_Acid=names(MW.p.gas.adj),
+                         pval=MW.p.gas.adj,
+                         coef=MW.p.gas.res,
+                         SampleType=c("Gastric"),
+                         Test=c("Wilcoxon_combat"),
+                          Outcome=c("Country"))
+# Perform multiple comparison correction using a given method of choice
+p.res.adj.g$qval <- p.adjust(p.res.adj.g$pval, method="fdr")
+p.res.adj.g.hits <- p.res.adj.g %>% filter(qval<0.05)
+p.res.adj.g.hits
+dim(p.res.adj.g.hits)
+
+#LINEAR MODELS with covariates
+
+#Feces.
+#for example, for the first bile acid:
+summary(lm(allocholic_acid3sul_r~batch + sexe + age + pays, data=combat_input_F))$coefficients
+summary(lm(allocholic_acid3sul_r~batch + sexe + age + pays, data=combat_input_F))$coefficients[6,4] #is the p value for country
+
+#alternatively for linear models: use the NON combat corrected data, e.g. rel abund only #NOTE: this is what is currently done here - df_fecesLM is not combat corrected. combat_input here is just for the matched metadata.
+#V1: with only basic covariates
+MW.lm.F = apply(df_fecesLM,2,
+              function(x) summary(lm(c(x)~combat_input_F$batch + 
+                                       combat_input_F$sexe + 
+                                       combat_input_F$age + 
+                                       combat_input_F$pays))$coefficients[6,4])
+MW.lm.F #provides adjusted p values for country, per bile acid, in feces.
+MW.lm.F.coef = apply(df_fecesLM,2,
+              function(x) summary(lm(c(x)~combat_input_F$batch + 
+                                       combat_input_F$sexe + 
+                                       combat_input_F$age + 
+                                       combat_input_F$pays))$coefficients[6,1]) #add the coef
+#add an FDR correct:
+MW.lm.F2 <- data.frame(Bile_Acid=names(MW.lm.F), 
+                       pval=MW.lm.F, 
+                       qval=p.adjust(MW.lm.F, method='fdr'),
+                       coef=MW.lm.F.coef,
+                       SampleType=c("Feces"),
+                       Test=c("LM"),
+                       Covariates=c("Batch,Sex,Age"),
+                        Outcome=c("Country"))
+
+MW.lm.D = apply(df_duoLM,2,
+              function(x) summary(lm(c(x)~combat_input_D$batch + 
+                                       combat_input_D$sexe + 
+                                       combat_input_D$age + 
+                                       combat_input_D$pays))$coefficients[6,4])
+MW.lm.D.coef = apply(df_duoLM,2,
+              function(x) summary(lm(c(x)~combat_input_D$batch + 
+                                       combat_input_D$sexe + 
+                                       combat_input_D$age + 
+                                       combat_input_D$pays))$coefficients[6,1]) #add the coef
+MW.lm.D2 <- data.frame(Bile_Acid=names(MW.lm.D), 
+                       pval=MW.lm.D, 
+                       qval=p.adjust(MW.lm.D, method='fdr'),
+                       coef=MW.lm.D.coef,
+                       SampleType=c("Duodenal"),
+                       Test="LM",
+                        Covariates=c("Batch,Sex,Age"),
+                        Outcome=c("Country"))
+
+
+MW.lm.G = apply(df_gas,2,
+              function(x) summary(lm(c(x)~bile_combat_output_G_meta$batch + 
+                                       bile_combat_output_G_meta$sexe + 
+                                       bile_combat_output_G_meta$age + 
+                                       bile_combat_output_G_meta$pays))$coefficients[6,4])
+MW.lm.G.coef = apply(df_gas,2,
+              function(x) summary(lm(c(x)~bile_combat_output_G_meta$batch + 
+                                       bile_combat_output_G_meta$sexe + 
+                                       bile_combat_output_G_meta$age + 
+                                       bile_combat_output_G_meta$pays))$coefficients[6,1])
+MW.lm.G2 <- data.frame(Bile_Acid=names(MW.lm.G), 
+                       pval=MW.lm.G, 
+                       qval=p.adjust(MW.lm.G, method='fdr'),
+                       coef=MW.lm.G.coef,
+                       SampleType=c("Gastric"),
+                       Test=c("LM"),
+                        Covariates=c("Batch,Sex,Age"),
+                        Outcome=c("Country"))
+
+#combine the data:
+diff_country <- Reduce(full_join, list(MW.lm.F2, MW.lm.D2, MW.lm.G2,
+                                                p.res.adj.f, p.res.adj.d, p.res.adj.g))
+diff_country
+#by country, several bile acids are significant both ways per compartment.
+
+#V2: with additional inflammatory and nutritional covariates
+#for example, for the first bile acid:
+summary(lm(allocholic_acid3sul_r~batch + sexe + age + 
+             haz_cont + calprotectinegg + aatmgg + anemia +
+             pays, 
+           data=combat_input_F))$coefficients
+summary(lm(allocholic_acid3sul_r~batch + sexe + age +
+             haz_cont + calprotectinegg + aatmgg + anemia +
+             pays, 
+           data=combat_input_F))$coefficients[10,4] #is the p value for country
+
+#Feces
+MW.lm.F3 = apply(df_fecesLM,2,
+              function(x) summary(lm(c(x)~combat_input_F$batch + 
+                                       combat_input_F$sexe + 
+                                       combat_input_F$age + 
+                                       combat_input_F$haz_cont +
+                                       combat_input_F$calprotectinegg +
+                                       combat_input_F$aatmgg + 
+                                       combat_input_F$anemia +
+                                       combat_input_F$pays))$coefficients[10,4])
+MW.lm.F3.coef = apply(df_fecesLM,2,
+              function(x) summary(lm(c(x)~combat_input_F$batch + 
+                                       combat_input_F$sexe + 
+                                       combat_input_F$age + 
+                                       combat_input_F$haz_cont +
+                                       combat_input_F$calprotectinegg +
+                                       combat_input_F$aatmgg + 
+                                       combat_input_F$anemia +
+                                       combat_input_F$pays))$coefficients[10,1])
+#add an FDR correct:
+MW.lm.F4 <- data.frame(Bile_Acid=names(MW.lm.F3), 
+                       pval=MW.lm.F3, 
+                       qval=p.adjust(MW.lm.F3, method='fdr'),
+                       coef=MW.lm.F3.coef,
+                       SampleType=c("Feces"),
+                       Test=c("LM_covariates"),
+                      Covariates=c("Batch,Sex,Age,HAZ,Calpro,AAT,Anemia"),
+                        Outcome=c("Country"))
+
+MW.lm.D3 = apply(df_duoLM,2,
+              function(x) summary(lm(c(x)~combat_input_D$batch + 
+                                       combat_input_D$sexe + 
+                                       combat_input_D$age + 
+                                       combat_input_D$haz_cont +
+                                       combat_input_D$calprotectinesurliquideduodn +
+                                       combat_input_D$aatsurldmgml + 
+                                       combat_input_D$anemia +
+                                       combat_input_D$pays))$coefficients[10,4])
+MW.lm.D3.coef = apply(df_duoLM,2,
+              function(x) summary(lm(c(x)~combat_input_D$batch + 
+                                       combat_input_D$sexe + 
+                                       combat_input_D$age + 
+                                       combat_input_D$haz_cont +
+                                       combat_input_D$calprotectinesurliquideduodn +
+                                       combat_input_D$aatsurldmgml + 
+                                       combat_input_D$anemia +
+                                       combat_input_D$pays))$coefficients[10,1])
+#add an FDR correct:
+MW.lm.D4 <- data.frame(Bile_Acid=names(MW.lm.D3), 
+                       pval=MW.lm.D3, 
+                       qval=p.adjust(MW.lm.D3, method='fdr'),
+                       coef=MW.lm.D3.coef,
+                       SampleType=c("Duodenal"),
+                       Test=c("LM_covariates"),
+                       Covariates=c("Batch,Sex,Age,HAZ,Calpro,AAT,Anemia"),
+                        Outcome=c("Country"))
+
+
+MW.lm.G3 = apply(df_gas,2,
+              function(x) summary(lm(c(x)~bile_combat_output_G_meta$batch + 
+                                       bile_combat_output_G_meta$sexe + 
+                                       bile_combat_output_G_meta$age + 
+                                       combat_input_G$haz_cont +
+                                       combat_input_G$calprotectinesurliquideduodn +
+                                       combat_input_G$aatsurldmgml + 
+                                       combat_input_G$anemia +
+                                       bile_combat_output_G_meta$pays))$coefficients[10,4])
+MW.lm.G3.coef = apply(df_gas,2,
+              function(x) summary(lm(c(x)~bile_combat_output_G_meta$batch + 
+                                       bile_combat_output_G_meta$sexe + 
+                                       bile_combat_output_G_meta$age + 
+                                       combat_input_G$haz_cont +
+                                       combat_input_G$calprotectinesurliquideduodn +
+                                       combat_input_G$aatsurldmgml + 
+                                       combat_input_G$anemia +
+                                       bile_combat_output_G_meta$pays))$coefficients[10,1])
+#add an FDR correct:
+MW.lm.G4 <- data.frame(Bile_Acid=names(MW.lm.G3), 
+                       pval=MW.lm.G3, 
+                       qval=p.adjust(MW.lm.G3, method='fdr'),
+                       coef=MW.lm.G3.coef,
+                       SampleType=c("Gastric"),
+                       Test=c("LM_covariates"),
+                       Covariates=c("Batch,Sex,Age,HAZ,Calpro,AAT,Anemia"),
+                        Outcome=c("Country"))
+
+#combine the data:
+diff_country <- Reduce(full_join, list(p.res.adj.f.hits, p.res.adj.d.hits, p.res.adj.g.hits,
+                                       MW.lm.F2, MW.lm.D2, MW.lm.G2,
+                                       MW.lm.F4, MW.lm.D4, MW.lm.G4))
+
+#also write this one out.
+#write.csv(diff_country, "/Users/khuus/ownCloud/KH-PhD/BileAcidsManuscript/Revisions_08.2026/bile_acid_hits_by_country_revised_forS14.csv")
+
+```
+
+```{r Fig S3 repeated testing by country: nonparametric no ComBat}
+
+#repeat nonparametric testing on the non-ComBat-corrected data. 
+##perform repeated wilcoxen by country within sample type. 
+#NB: the "LM" dataframe is just the non corrected one. Log adjusted. Rel abund.
+#feces
+MW.p.feces.adj = apply(df_fecesLM,2,
+                 function(x) wilcox.test(c(x)~bile_combat_output_F_meta$pays)$p.value)
+MW.p.feces.res = apply(df_fecesLM,2,
+                 function(x) wilcox.test(c(x)~bile_combat_output_F_meta$pays)$statistic) #add for revisions
+p.res.noc.f = data.frame(Bile_Acid=names(MW.p.feces.adj),
+                         pval=MW.p.feces.adj,
+                         coef=MW.p.feces.res,
+                         SampleType=c("Feces"),
+                         Test=c("Wilcoxon"),
+                         Outcome=c("Country"))
+# Perform multiple comparison correction using a given method of choice
+p.res.noc.f$qval <- p.adjust(p.res.noc.f$pval, method="fdr")
+p.res.noc.f.hits <- p.res.noc.f %>% filter(qval<0.05)
+p.res.noc.f.hits
+dim(p.res.noc.f.hits)
+
+#duodenum
+MW.p.duo.adj = apply(df_duoLM,2,
+                       function(x) wilcox.test(c(x)~bile_combat_output_D_meta$pays)$p.value)
+MW.p.duo.res = apply(df_duoLM,2,
+                 function(x) wilcox.test(c(x)~bile_combat_output_D_meta$pays)$statistic) #add for revisions
+p.res.noc.d = data.frame(Bile_Acid=names(MW.p.duo.adj),
+                         pval=MW.p.duo.adj,
+                         coef=MW.p.duo.res,
+                         SampleType=c("Duodenal"),
+                         Test=c("Wilcoxon"),
+                          Outcome=c("Country"))
+# Perform multiple comparison correction using a given method of choice
+p.res.noc.d$qval <- p.adjust(p.res.noc.d$pval, method="fdr")
+p.res.noc.d.hits <- p.res.noc.d %>% filter(qval<0.05)
+p.res.noc.d.hits
+dim(p.res.noc.d.hits)
+
+#gastric
+MW.p.gas.adj = apply(df_gasLM,2,
+                     function(x) wilcox.test(c(x)~bile_combat_output_G_meta$pays)$p.value)
+MW.p.gas.res = apply(df_gasLM,2,
+                 function(x) wilcox.test(c(x)~bile_combat_output_G_meta$pays)$statistic) #add for revisions
+p.res.noc.g = data.frame(Bile_Acid=names(MW.p.gas.adj),
+                         pval=MW.p.gas.adj,
+                         coef=MW.p.gas.res,
+                         SampleType=c("Gastric"),
+                         Test=c("Wilcoxon"),
+                          Outcome=c("Country"))
+# Perform multiple comparison correction using a given method of choice
+p.res.noc.g$qval <- p.adjust(p.res.noc.g$pval, method="fdr")
+p.res.noc.g.hits <- p.res.noc.g %>% filter(qval<0.05)
+p.res.noc.g.hits
+dim(p.res.noc.g.hits)
+
+#combine, export.
+diff_country2 <- Reduce(full_join, list(p.res.noc.f.hits, p.res.noc.d.hits, p.res.noc.g.hits))
+
+#write.csv(diff_country2, "/Users/khuus/ownCloud/KH-PhD/BileAcidsManuscript/Revisions_08.2026/bile_acid_hits_by_country_nonparametricNOCOMBAT_revised.csv")
+
+```
+
+```{r Figs all define bile acid classes}
+#definition of all bile acids. Claude helped based on literature. I added manual categories. Sanity check seems correct.
+
+bile_acid_class <- c(
+  allocholic_acid3sul_r            = "Secondary",
+  allocholic_acid_r                = "Secondary",
+  alloisolithocholic_acid_r        = "Secondary",
+  apocholic_acid_r                 = "Secondary",
+  betamuricholic_acid_r            = "Primary",
+  chenodeoxycholic_acid_r          = "Primary",
+  chenodeoxycholic_acid24gluc_r    = "Primary",
+  chenodeoxycholic_acid3gluc_r     = "Primary",
+  chenodeoxycholic_acid3sul_r      = "Primary",
+  cholic_acid_r                    = "Primary",
+  cholic_acid3sul_r                = "Primary",
+  dehydrocholic_acid_r             = "Secondary",
+  dehydrolithocholic_acid_r        = "Secondary",
+  deoxycholic_acid_r               = "Secondary",
+  deoxycholic_acid24gluc_r         = "Secondary",
+  deoxycholic_acid3gluc_r          = "Secondary",
+  deoxycholic_acid3sul_r           = "Secondary",
+  dioxolithocholic_acid_r          = "Secondary",
+  glycochenodeoxycholic_acid3sul_r = "Primary",
+  glycocholic_acid3sul_r           = "Primary",
+  glycohyodeoxycholic_acid3sul_r   = "Secondary",
+  glycolithocholic_acid3sul_r      = "Secondary",
+  glycoallocholic_acid3sul_r       = "Secondary",
+  glycoallocholic_acid_r           = "Secondary",
+  glycochenodeoxycholic_acid_r     = "Primary",
+  glycocholic_acid_r               = "Primary",
+  glycodehydrocholic_acid_r        = "Secondary",
+  glycodeoxycholic_acid_r          = "Secondary",
+  glycodeoxycholic_acid3sul_r      = "Secondary",
+  glycohyocholic_acid_r            = "Secondary",
+  glycohyodeoxycholic_acid_r       = "Secondary",
+  glycolithocholic_acid_r          = "Secondary",
+  glycoursodeoxycholic_acid_r      = "Secondary",
+  glycoursodeoxycholic_acid3sul_r  = "Secondary",
+  hyodeoxycholic_acid_r            = "Secondary",
+  isodeoxycholic_acid_r            = "Secondary",
+  isolithocholic_acid_r            = "Secondary",
+  isolithocholic_acid3sul_r        = "Secondary",
+  lithocholic_acid_r               = "Secondary",
+  lithocholic_acid24gluc_r         = "Secondary",
+  lithocholic_acid3gluc_r          = "Secondary",
+  lithocholic_acid3sul_r           = "Secondary",
+  murocholic_acid_r                = "Secondary",
+  norcholic_acid_r                 = "Secondary",
+  nordeoxycholic_acid_r            = "Secondary",
+  norursodeoxycholic_acid_r        = "Secondary",
+  sevenketodeoxycholic_acid_r      = "Secondary",
+  sevenketolithocholic_acid_r      = "Secondary",
+  sixsevendiketolithocholic_acid_r = "Secondary",
+  taurolithocholic_acid3sul_r      = "Secondary",
+  tauroallocholic_acid_r           = "Secondary",
+  tauroamuricholic_acid_r          = "Primary",
+  taurobmuricholic_acid_r          = "Primary",
+  taurochenodeoxycholic_acid3sul_r = "Primary",
+  taurochenodeoxycholic_acid_r     = "Primary",
+  taurocholic_acid_r               = "Primary",
+  taurodehydrocholic_acid_r        = "Secondary",
+  taurodeoxycholic_acid_r          = "Secondary",
+  taurodeoxycholic_acid3sul_r      = "Secondary",
+  taurohyocholic_acid_r            = "Secondary",
+  taurolithocholic_acid_r          = "Secondary",
+  tauroursodeoxycholic_acid3sul_r  = "Secondary",
+  tauroudc_hdc_r                   = "Secondary",
+  taurowmuricholic_acid_r          = "Secondary",
+  threeoxocholic_acid_r            = "Secondary",
+  twelveketocdc_acid_r             = "Secondary",
+  twelveketolithocholic_acid_r     = "Secondary",
+  ursocholic_acid_r                = "Secondary",
+  ursodeoxycholic_acid_r           = "Secondary",
+  ursodeoxycholic_acid24gluc_r     = "Secondary",
+  ursodeoxycholic_acid3gluc_r      = "Secondary",
+  ursodeoxycholic_acid3sul_r       = "Secondary",
+  omega_muricholic_acid_r          = "Secondary",
+  lambda_muricholic_acid_r         = "Secondary",
+  alpha_muricholic_acid_r          = "Primary",
+  lithoderivatives_r               = "Group",
+  primarymain_r                    = "Group",
+  secondarymain_r                  = "Group", 
+  urso_r                           = "Group",
+  tauro_r                          = "Group",
+  glyco_r                          = "Group",
+  conjugated_r                     = "Group", 
+  sulfo_r                          = "Group", 
+  unconjugated_r                   = "Group"
+)
+```
+
+## Fig S3D
+```{r Fig S3DE diff by country plots}
+#are there any bile acids different in all three compartments, by wilcoxen?
+Reduce(intersect, list(p.res.adj.f.hits$Bile_Acid, p.res.adj.d.hits$Bile_Acid, p.res.adj.g.hits$Bile_Acid))
+#glycolithocholic acid?
+#does it pass corrections in all?
+diff_country %>% filter(Bile_Acid=="glycolithocholic_acid_r"&pval<0.05) 
+#only stays sig by all tests in feces
+
+X$SampleType <- factor(X$SampleType, levels=c("Feces", "Duodenal", "Gastric"))
+#doesn't look so impressive
+#pdf("plots/2#_Glycolithocholic_acid_Country.pdf", width=4, height=3)
+p <- ggplot(X, aes(y=log(glycolithocholic_acid_r), x=pays)) + geom_boxplot(outlier.shape=NA) + geom_jitter(width=0.1, height=0) + 
+  theme(panel.background = element_blank(), axis.line = element_line(colour = "black"),
+               axis.title.y = element_text(margin = margin(r = 10))) + 
+  xlab("Country") + 
+  ylab("Relative abundance (%)") + 
+  ggtitle("Glycolithocholic Acid") + 
+  facet_grid(~SampleType)
+p
+#dev.off()
+
+#SMALL INTESTINE BY COUNTRY:
+#and just in the small intestine? #glycohyodeoxycholic acid
+si_hits1 <- intersect(p.res.adj.d.hits$Bile_Acid, p.res.adj.g.hits$Bile_Acid)
+#do those hits in the small intestine remain significant after linear models, with and without correction?
+si_hits2 <- diff_country %>% filter(Test=="LM"&SampleType%in%c("Gastric", "Duodenal")&qval<0.05) 
+si_hits3 <- diff_country %>% filter(Test=="LM_covariates"&SampleType%in%c("Gastric", "Duodenal")&pval<0.05) #allow uncorrected for 'checks'
+intersect(si_hits1, si_hits2$Bile_Acid) #glycohyodeoxycholic acid is still sig
+intersect(si_hits1, si_hits3$Bile_Acid) #and is still raw significant, after anemia and inflammation correction
+si_hits_country <- intersect(si_hits1, si_hits3$Bile_Acid) 
+
+#plot glycohyodeoxycholic acid (and glycohyodeoxycholic_acid3sul_r)
+#double check actual stats before plotting:
+diff_country %>% filter(Bile_Acid=="glycohyodeoxycholic_acid_r"&pval<0.05)
+pdata <- X
+pdata$SampleType <- factor(pdata$SampleType, levels=c("Feces", "Duodenal", "Gastric"))
+#label data
+annotation_data <- data.frame(SampleType=c("Feces", "Duodenal", "Gastric"),
+                              sig=c("NS", "*", "*"),
+                              x=c(1.5, 1.5, 1.5),
+                              y=c(-0.5, -0.5, -0.5))
+#pdf("plots/##_Glycohyodeoxycholic_Country.pdf", width=4, height=3)
+p <- ggplot(pdata, aes(y=log(glycohyodeoxycholic_acid_r), x=pays)) + geom_boxplot(outlier.shape=NA) + geom_jitter(width=0.1, height=0) + theme(panel.background = element_blank(), axis.line = element_line(colour = "black"),
+               axis.title.y = element_text(margin = margin(r = 10))) + 
+  xlab("Country") + ylab("Log relative abundance (%)") + ggtitle("Glycohyodeoxycholic Acid") + 
+  facet_grid(~SampleType) + 
+  annotate('segment', x=1, xend=2, y=-1, yend=-1) #+
+  #annotate('text', x=c(1.5, 1.5, 1.5), y=c(-0.5, -0.5, -0.5),
+    #aes(label = sig))
+p
+#dev.off()
+
+#bile acids which are significant in feces by wilcoxon:
+fecal_hits <- p.res.adj.f.hits %>% filter(qval<0.05)
+#bile acids which are significant in feces after adjusting for additional covariates:
+fecal_hits_corr <- MW.lm.F4 %>% filter(qval<0.05) 
+fecal_hits_corr$Bile_Acid
+#bile acids which do NOT remain significant after adjusting for additional covariates?
+fecal_hits <- MW.lm.F2 %>% filter(qval<0.05)
+fecal_hits_lost <- setdiff(fecal_hits$Bile_Acid, fecal_hits_corr$Bile_Acid)
+fecal_hits_lost #only a few
+#check the main hits by feces that are significant by everything 
+feces_hits_country <- Reduce(intersect, list(p.res.adj.f.hits$Bile_Acid,
+                                             MW.lm.F2[which(MW.lm.F4$qval<0.05),]$Bile_Acid,
+                                             MW.lm.F4[which(MW.lm.F4$qval<0.05),]$Bile_Acid))
+feces_hits_country
+
+#since there are so many: first make boxplots for the main categories: primary, tauro, and lithoderivatives
+
+# make boxplots by country of origin
+#double check p values for selection 
+diff_country %>% filter(Bile_Acid=="primarymain_r"&qval<0.05) #sig by feces all types of model; NS in SI
+X$SampleType <- factor(X$SampleType, levels=c("Gastric", "Duodenal", "Feces"))
+
+#add a data frame to label with geom_text()
+sigdf <- data.frame(pays=1.5, primarymain_r=115, SampleType=factor("Feces", levels = c("Gastric","Duodenanl","Feces")), label="*")
+segdf <- data.frame(pays=c(1,2), primarymain_r=c(105,105), SampleType=factor("Feces", levels = c("Gastric","Duodenanl","Feces")), label="*")
+
+
+#pdf("plots/S3D_PrimaryBileAcidsbyCountryFeces.pdf", width=4.5, height=3)
+p <- ggplot(X, aes(y=log(primarymain_r), x=pays)) + geom_boxplot(outlier.shape=NA) + geom_jitter(width=0.1, height=0) +
+  theme(panel.background = element_blank(), axis.line = element_line(colour = "black"),
+               axis.title.y = element_text(margin = margin(r = 10))) + 
+  xlab("Country") + ylab("Log relative abundance (%)") + ggtitle("Primary Bile Acids") + 
+  facet_grid(~SampleType) +
+  geom_text(data = sigdf,label = "*", size=5) +
+  geom_line(data=segdf)
+FigureS3D <- p
+
+pdf("../../Figure_panels/FigureS3D.pdf", height = 3, width = 3)
+FigureS3D
+dev.off()
+
+source_data_S3D <- X %>% select(primarymain_r, pays, SampleType)
+
+write.csv2(source_data_S3D, "../../Source_data/FigureS3D.csv")
+```
+## Fig S3E
+```{r}
+#conjugated
+diff_country %>% filter(Bile_Acid=="conjugated_r"&qval<0.05) #sig by feces by Wilcoxon and LM only
+diff_country %>% filter(Bile_Acid=="conjugated_r"&pval<0.05) #not remotely sig in the adjusted model
+
+#add a data frame to label with geom_text()
+sigdf <- data.frame(pays=1.5, conjugated_r=115, SampleType=factor("Feces", levels = c("Gastric","Duodenanl","Feces")), label="*")
+segdf <- data.frame(pays=c(1,2), conjugated_r=c(105,105), SampleType=factor("Feces", levels = c("Gastric","Duodenanl","Feces")), label="*")
+
+#pdf("plots/S3E_ConjugatedBileAcidsbyCountryFeces.pdf", width=4.5, height=3)
+p <- ggplot(X, aes(y=log(conjugated_r), x=pays)) + geom_boxplot(outlier.shape=NA) + geom_jitter(width=0.1, height=0) +
+  theme(panel.background = element_blank(), axis.line = element_line(colour = "black"),
+               axis.title.y = element_text(margin = margin(r = 10))) + 
+  xlab("Country") + ylab("Log relative abundance (%)") + ggtitle("Conjugated Bile Acids") + 
+  facet_grid(~SampleType) +
+    geom_text(data = sigdf,label = "*", size=5) +
+  geom_line(data=segdf)
+FigureS3E <- p
+
+pdf("../../Figure_panels/FigureS3E.pdf", height = 3, width = 3)
+FigureS3E
+dev.off()
+
+source_data_S3E <- X %>% select(conjugated_r, pays, SampleType)
+
+write.csv2(source_data_S3E, "../../Source_data/FigureS3E.csv")
+#and now make a heatmap, analagous to the sample-type one but divided by country, for all the consistent hits
+```
+## Fig S3F
+```{r Fig S3F diff by country heatmap REVISED}
+#make a heatmap of all the single bile acids by sample type.
+#revised version: select sig hits based on non-parametric, NON COMBAT CORRECTED data
+#NB: this is the actual final Fig S3F
+#first: summarize the mean value of each bile acid per sample type AND country (?)
+p.res.noc.f.hits #make sure these are correctly from the non combat ones (test=Wilcoxon)
+to_summarize <- X %>%
+  dplyr::select(all_of(c(p.res.noc.f.hits$Bile_Acid,
+                         p.res.adj.f.hits$Bile_Acid,
+                         feces_hits_country,
+                         "SampleType", "pays")))
+to_summarize[is.na(to_summarize)] <- 0 #0 is 0, no NAs
+AverageByCountry <- to_summarize %>% group_by(SampleType, pays) %>% summarize_all(mean)
+AverageByCountry #nice :) 
+AverageByCountry <- AverageByCountry %>% pivot_longer(cols=c(3:length(names(AverageByCountry))),
+                                                            names_to="Bile_Acid", values_to="Relative_Abundance")
+AverageByCountry #double nice :) 
+AverageByCountry <- AverageByCountry[order(AverageByCountry$Relative_Abundance),]
+AverageByCountry$SampleType <- factor(AverageByCountry$SampleType, levels=c("Gastric", "Duodenal", "Feces"))
+
+pdata <- AverageByCountry 
+mylevels <- AverageByCountry %>% filter(SampleType=="Feces"&pays=="CAR")
+pdata$Bile_Acid <- factor(pdata$Bile_Acid, levels=mylevels$Bile_Acid)
+
+#I think maybe better to plot feces only, right? #but also: only if it is significant WITH and WITHOUT combat
+pdata <- pdata %>% filter(SampleType=="Feces" & Bile_Acid %in% c(p.res.noc.f.hits$Bile_Acid) 
+                          & Bile_Acid %in% c(p.res.adj.f.hits$Bile_Acid))
+
+#scale everything rowwise relative to the average abundance of the bile acid
+pdata2 <- pdata %>% group_by(Bile_Acid) %>% mutate(Abund_Avg=mean(Relative_Abundance, na.omit=TRUE))
+pdata2$Scaled_Abund <- pdata2$Relative_Abundance / pdata2$Abund_Avg
+#add a star in case it is also raw significant in the LMs (with adjustment)
+lm_stars <- diff_country %>% filter(SampleType=="Feces"&pval<0.05&Test=="LM_covariates")
+pdata2$lm_sig <- ifelse(pdata2$pays=="CAR" & #only put the star for one tile
+                          pdata2$Bile_Acid %in% lm_stars$Bile_Acid, "*", "")
+
+p <- ggplot(pdata2, aes(x=pays, y=Bile_Acid, fill=log(Scaled_Abund), label=lm_sig)) + geom_tile(colour='black')
+p <- p + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + 
+  geom_text(colour='white') +
+  xlab(NULL) + 
+  ylab(NULL) + 
+  scale_fill_viridis() + 
+  labs(fill="Log Rel. Abund.") + ggtitle("Fecal Bile Acids Differentially Abundant by Country") +
+  coord_flip()
+FigureS3F <- p
+
+pdf("../../Figure_panels/FigureS3F.pdf")
+FigureS3F
+dev.off()
+
+write.csv2(pdata2, "../../Source_data/FigureS3F.csv")
+
+
+#also add a panel for primary vs. secondary bile acids as per Fig 1.
+#bile acids defined above.
+
+#one row per bile acid actually shown in the heatmap, in the same order as the heatmap y-axis
+sidebar_data <- pdata %>% dplyr::distinct(Bile_Acid)
+sidebar_data$Class <- bile_acid_class[as.character(sidebar_data$Bile_Acid)]
+sidebar_data$Class[is.na(sidebar_data$Class)] <- "Unclassified" #safety net if a new bile acid ever shows up
+table(sidebar_data$Class, useNA="ifany") #check nothing fell through as Unclassified
+
+p_sidebar <- ggplot(sidebar_data, aes(y=1, x=Bile_Acid, fill=Class)) + geom_tile(colour='black')
+p_sidebar <- p_sidebar + scale_fill_manual(values=c(Primary="black", Secondary="grey80", Group="white", Unclassified="red"), drop=FALSE)
+p_sidebar <- p_sidebar + theme(axis.text.x = element_blank(), axis.text.y = element_blank(),
+                                axis.ticks = element_blank(), panel.background = element_blank(),
+                                legend.key.size = unit(0.4,"cm"), legend.text=element_text(size=9),
+                                legend.title=element_text(size=10))
+p_sidebar <- p_sidebar + xlab(NULL) + ylab(NULL) + labs(fill="Bile Acid Type")
+
+p_combined <- ggarrange(p_sidebar, p, nrow=2, align="hv", heights=c(0.6, 0.65))
+
+#pdf(width=6.5, height=5.5, "/Users/khuus/ownCloud/KH-PhD/BileAcidsManuscript/Revisions_08.2026/plots/S3F_Heatmap_BileAcidsbyPAYS_wsidebar_revised2.pdf")
+print(p_combined)
+#dev.off()
+
+```
+
+# Fig. 2
+```{r Fig 2 repeated testing by stunting my way}
+##perform repeated spearman by country within sample type. (combat-adjusted data.)
+#feces (HAZ)
+MS.p.feces.haz = apply(df_feces,2,
+                 function(x) cor.test(c(x), bile_combat_output_F_meta$haz_cont, method='spearman')$p.value)
+MS.r.feces.haz = apply(df_feces,2,
+                 function(x) cor.test(c(x), bile_combat_output_F_meta$haz_cont, method='spearman')$estimate)
+p.res.haz.f = data.frame(Bile_Acid=names(MS.p.feces.haz),
+                         pval=MS.p.feces.haz,
+                         coef=MS.r.feces.haz,
+                         SampleType=c("Feces"),
+                         Test=c("Spearman_combat"),
+                         Outcome=c("HAZ"))
+# Perform multiple comparison correction using a given method of choice
+p.res.haz.f$qval <- p.adjust(p.res.haz.f$pval, method="fdr")
+p.res.haz.f.hits <- p.res.haz.f %>% filter(qval<0.05)
+p.res.haz.f.hits[order(p.res.haz.f.hits$pval),] #OK it's ok, with the batch corrected data we still get many lithocholic acid hits
+dim(p.res.haz.f.hits)
+
+#feces (Stunted)
+MW.p.feces.stunt = apply(df_feces,2,
+                 function(x) wilcox.test(c(x)~bile_combat_output_F_meta$stunted)$p.value)
+MW.p.feces.stunt.res = apply(df_feces,2,
+                 function(x) wilcox.test(c(x)~bile_combat_output_F_meta$stunted)$statistic)
+p.res.stunt.f = data.frame(Bile_Acid=names(MW.p.feces.stunt),
+                         pval=MW.p.feces.stunt,
+                         coef=MW.p.feces.stunt.res,
+                         SampleType=c("Feces"),
+                         Test=c("Wilcoxon_combat"),
+                         Outcome=c("Stunted"))
+# Perform multiple comparison correction using a given method of choice
+p.res.stunt.f$qval <- p.adjust(p.res.stunt.f$pval, method="fdr")
+p.res.stunt.f.hits <- p.res.stunt.f %>% filter(qval<0.05)
+p.res.stunt.f.hits
+dim(p.res.stunt.f.hits)
+
+#duodenum
+MS.p.duo.haz = apply(df_duo,2,
+                 function(x) cor.test(c(x), bile_combat_output_D_meta$haz_cont, method='spearman')$p.value)
+MS.r.duo.haz = apply(df_duo,2,
+                 function(x) cor.test(c(x), bile_combat_output_D_meta$haz_cont, method='spearman')$estimate)
+p.res.haz.d = data.frame(Bile_Acid=names(MS.p.duo.haz),
+                         pval=MS.p.duo.haz,
+                         coef=MS.r.duo.haz,
+                         SampleType=c("Duodenal"),
+                         Test=c("Spearman_combat"),
+                         Outcome=c("HAZ"))
+# Perform multiple comparison correction using a given method of choice
+p.res.haz.d$qval <- p.adjust(p.res.haz.d$pval, method="fdr")
+p.res.haz.d.hits <- p.res.haz.d %>% filter(qval<0.05)
+p.res.haz.d.hits #no hits
+dim(p.res.haz.d.hits)
+
+#gastric
+MS.p.gas.haz = apply(df_gas,2,
+                 function(x) cor.test(c(x), bile_combat_output_G_meta$haz_cont, method='spearman')$p.value)
+MS.r.gas.haz = apply(df_gas,2,
+                 function(x) cor.test(c(x), bile_combat_output_G_meta$haz_cont, method='spearman')$estimate)
+p.res.haz.g = data.frame(Bile_Acid=names(MS.p.gas.haz),
+                         pval=MS.p.gas.haz,
+                         coef=MS.r.gas.haz,
+                         SampleType=c("Gastric"),
+                         Test=c("Spearman_combat"),
+                         Outcome=c("HAZ"))
+p.res.haz.g$qval <- p.adjust(p.res.haz.g$pval, method="fdr")
+p.res.haz.g.hits <- p.res.haz.g %>% filter(qval<0.05) #no hits
+p.res.haz.g.hits
+dim(p.res.haz.g.hits)
+
+#LINEAR MODELS, unadjusted data
+#Feces.
+#for example, for the first bile acid:
+summary(lm(allocholic_acid3sul_r~batch + pays + sexe + age + calprotectineggdeps + aatmggdeps + stunted, data=bile_combat_output_F_meta))$coefficients
+summary(lm(allocholic_acid3sul_r~batch + pays + sexe + age + calprotectineggdeps + aatmggdeps + stunted, data=bile_combat_output_F_meta))$coefficients[9,4] #is the p value for stunting
+
+lm.F.stunt = apply(df_fecesLM,2,
+              function(x) summary(lm(c(x)~bile_combat_output_F_meta$batch + 
+                                       bile_combat_output_F_meta$pays +
+                                       bile_combat_output_F_meta$sexe + 
+                                       bile_combat_output_F_meta$age + 
+                                       bile_combat_output_F_meta$calprotectineggdeps +
+                                       bile_combat_output_F_meta$aatmggdeps + 
+                                       bile_combat_output_F_meta$stunted))$coefficients[9,4])
+lm.F.stunt.coef = apply(df_fecesLM,2,
+              function(x) summary(lm(c(x)~bile_combat_output_F_meta$batch + 
+                                       bile_combat_output_F_meta$pays +
+                                       bile_combat_output_F_meta$sexe + 
+                                       bile_combat_output_F_meta$age + 
+                                       bile_combat_output_F_meta$calprotectineggdeps +
+                                       bile_combat_output_F_meta$aatmggdeps + 
+                                       bile_combat_output_F_meta$stunted))$coefficients[9,1])
+#add an FDR correct:
+lm.F.stunt2 <- data.frame(Bile_Acid=names(lm.F.stunt), 
+                       pval=lm.F.stunt, 
+                       qval=p.adjust(lm.F.stunt, method='fdr'),
+                       coef=lm.F.stunt.coef,
+                       SampleType=c("Feces"),
+                       Test=c("LM_cov"),
+                       Covariates=c("Batch,Country,Sex,Age,Calpro,AAT"),
+                       Outcome=c("Stunted"))
+lm_F_hits <- lm.F.stunt2 %>% filter(qval<0.05)
+lm_F_hits #none
+
+#versus HAZ
+lm.F.haz = apply(df_fecesLM,2,
+              function(x) summary(lm(c(x)~combat_input_F$batch + 
+                                       combat_input_F$pays +
+                                       combat_input_F$sexe + 
+                                       combat_input_F$age + 
+                                       combat_input_F$calprotectineggdeps +
+                                       combat_input_F$aatmggdeps + 
+                                       combat_input_F$haz_cont))$coefficients[9,4])
+lm.F.haz.coef = apply(df_fecesLM,2,
+              function(x) summary(lm(c(x)~combat_input_F$batch + 
+                                       combat_input_F$pays +
+                                       combat_input_F$sexe + 
+                                       combat_input_F$age + 
+                                       combat_input_F$calprotectineggdeps +
+                                       combat_input_F$aatmggdeps + 
+                                       combat_input_F$haz_cont))$coefficients[9,1])
+#add an FDR correct:
+lm.F.haz2 <- data.frame(Bile_Acid=names(lm.F.haz), 
+                       pval=lm.F.haz, 
+                       qval=p.adjust(lm.F.haz, method='fdr'),
+                       coef=lm.F.haz.coef,
+                       SampleType=c("Feces"),
+                       Test=c("LM_cov"),
+                       Covariates=c("Batch,Country,Sex,Age,Calpro,AAT"),
+                       Outcome=c("HAZ"))
+lm_F_hits <- lm.F.haz2 %>% filter(qval<0.05)
+lm_F_hits #no hits
+
+#Gastric#versus HAZ
+lm.G.haz = apply(df_gasLM,2,
+              function(x) summary(lm(c(x)~combat_input_G$batch + 
+                                       combat_input_G$pays +
+                                       combat_input_G$sexe + 
+                                       combat_input_G$age + 
+                                       combat_input_G$calprotectinesurliquideduodn +
+                                       combat_input_G$aatsurldmgml + 
+                                       combat_input_G$haz_cont))$coefficients[9,4])
+lm.G.haz.coef = apply(df_gasLM,2,
+              function(x) summary(lm(c(x)~combat_input_G$batch + 
+                                       combat_input_G$pays +
+                                       combat_input_G$sexe + 
+                                       combat_input_G$age + 
+                                       combat_input_G$calprotectinesurliquideduodn +
+                                       combat_input_G$aatsurldmgml + 
+                                       combat_input_G$haz_cont))$coefficients[9,1])
+#add an FDR correct:
+lm.G.haz2 <- data.frame(Bile_Acid=names(lm.G.haz), 
+                       pval=lm.G.haz, 
+                       qval=p.adjust(lm.G.haz, method='fdr'),
+                       coef=lm.G.haz.coef,
+                       SampleType=c("Gastric"),
+                       Test=c("LM_cov"),
+                       Covariates=c("Batch,Country,Sex,Age,Calpro,AAT"),
+                       Outcome=c("HAZ"))
+
+#Duodenum#versus HAZ
+lm.D.haz = apply(df_duoLM,2,
+              function(x) summary(lm(c(x)~combat_input_D$batch + 
+                                       combat_input_D$pays +
+                                       combat_input_D$sexe + 
+                                       combat_input_D$age + 
+                                       combat_input_D$calprotectinesurliquideduodn +
+                                       combat_input_D$aatsurldmgml + 
+                                       combat_input_D$haz_cont))$coefficients[9,4])
+lm.D.haz.coef = apply(df_duoLM,2,
+              function(x) summary(lm(c(x)~combat_input_D$batch + 
+                                       combat_input_D$pays +
+                                       combat_input_D$sexe + 
+                                       combat_input_D$age + 
+                                       combat_input_D$calprotectinesurliquideduodn +
+                                       combat_input_D$aatsurldmgml + 
+                                       combat_input_D$haz_cont))$coefficients[9,1])
+#add an FDR correct:
+lm.D.haz2 <- data.frame(Bile_Acid=names(lm.D.haz), 
+                       pval=lm.D.haz, 
+                       qval=p.adjust(lm.D.haz, method='fdr'),
+                       coef=lm.D.haz.coef,
+                       SampleType=c("Duodenal"),
+                       Test=c("LM_cov"),
+                       Covariates=c("Batch,Country,Sex,Age,Calpro,AAT"),
+                       Outcome=c("HAZ"))
+
+##add models where there are NOT additional covariates, but only basic (sex, age, batch) - REVISIONS
+#LINEAR MODELS, unadjusted data
+#Feces.
+#for example, for the first bile acid:
+summary(lm(allocholic_acid3sul_r~batch + pays + sexe + age + stunted, data=bile_combat_output_F_meta))$coefficients
+summary(lm(allocholic_acid3sul_r~batch + pays + sexe + age + stunted, data=bile_combat_output_F_meta))$coefficients[7,4] #is the p value for stunting
+
+lm.F.stunt = apply(df_fecesLM,2,
+              function(x) summary(lm(c(x)~bile_combat_output_F_meta$batch + 
+                                       bile_combat_output_F_meta$pays +
+                                       bile_combat_output_F_meta$sexe + 
+                                       bile_combat_output_F_meta$age + 
+                                       bile_combat_output_F_meta$stunted))$coefficients[7,4])
+lm.F.stunt.coef = apply(df_fecesLM,2,
+              function(x) summary(lm(c(x)~bile_combat_output_F_meta$batch + 
+                                       bile_combat_output_F_meta$pays +
+                                       bile_combat_output_F_meta$sexe + 
+                                       bile_combat_output_F_meta$age + 
+                                       bile_combat_output_F_meta$stunted))$coefficients[7,1])
+#add an FDR correct:
+lm.F.stunt1 <- data.frame(Bile_Acid=names(lm.F.stunt), 
+                       pval=lm.F.stunt, 
+                       qval=p.adjust(lm.F.stunt, method='fdr'),
+                       coef=lm.F.stunt.coef,
+                       SampleType=c("Feces"),
+                       Test=c("LM"),
+                       Covariates=c("Batch,Country,Sex,Age"),
+                       Outcome=c("Stunted"))
+lm_F_hits <- lm.F.stunt1 %>% filter(qval<0.05)
+lm_F_hits #none
+
+#versus HAZ
+lm.F.haz = apply(df_fecesLM,2,
+              function(x) summary(lm(c(x)~combat_input_F$batch + 
+                                       combat_input_F$pays +
+                                       combat_input_F$sexe + 
+                                       combat_input_F$age + 
+                                       combat_input_F$haz_cont))$coefficients[7,4])
+lm.F.haz.coef = apply(df_fecesLM,2,
+              function(x) summary(lm(c(x)~combat_input_F$batch + 
+                                       combat_input_F$pays +
+                                       combat_input_F$sexe + 
+                                       combat_input_F$age + 
+                                       combat_input_F$haz_cont))$coefficients[7,1])
+#add an FDR correct:
+lm.F.haz1 <- data.frame(Bile_Acid=names(lm.F.haz), 
+                       pval=lm.F.haz, 
+                       qval=p.adjust(lm.F.haz, method='fdr'),
+                       coef=lm.F.haz.coef,
+                       SampleType=c("Feces"),
+                       Test=c("LM"),
+                       Covariates=c("Batch,Country,Sex,Age"),
+                       Outcome=c("HAZ"))
+lm_F_hits <- lm.F.haz1 %>% filter(qval<0.05)
+lm_F_hits #no hits
+
+#Gastric#versus HAZ
+lm.G.haz = apply(df_gasLM,2,
+              function(x) summary(lm(c(x)~combat_input_G$batch + 
+                                       combat_input_G$pays +
+                                       combat_input_G$sexe + 
+                                       combat_input_G$age + 
+                                       combat_input_G$haz_cont))$coefficients[7,4])
+lm.G.haz.coef = apply(df_gasLM,2,
+              function(x) summary(lm(c(x)~combat_input_G$batch + 
+                                       combat_input_G$pays +
+                                       combat_input_G$sexe + 
+                                       combat_input_G$age + 
+                                       combat_input_G$calprotectinesurliquideduodn +
+                                       combat_input_G$aatsurldmgml + 
+                                       combat_input_G$haz_cont))$coefficients[7,1])
+#add an FDR correct:
+lm.G.haz1 <- data.frame(Bile_Acid=names(lm.G.haz), 
+                       pval=lm.G.haz, 
+                       qval=p.adjust(lm.G.haz, method='fdr'),
+                       coef=lm.G.haz.coef,
+                       SampleType=c("Gastric"),
+                       Test=c("LM"),
+                       Covariates=c("Batch,Country,Sex,Age"),
+                       Outcome=c("HAZ"))
+
+#Duodenum#versus HAZ
+lm.D.haz = apply(df_duoLM,2,
+              function(x) summary(lm(c(x)~combat_input_D$batch + 
+                                       combat_input_D$pays +
+                                       combat_input_D$sexe + 
+                                       combat_input_D$age + 
+                                       combat_input_D$haz_cont))$coefficients[7,4])
+lm.D.haz.coef = apply(df_duoLM,2,
+              function(x) summary(lm(c(x)~combat_input_D$batch + 
+                                       combat_input_D$pays +
+                                       combat_input_D$sexe + 
+                                       combat_input_D$age + 
+                                       combat_input_D$haz_cont))$coefficients[7,1])
+#add an FDR correct:
+lm.D.haz1 <- data.frame(Bile_Acid=names(lm.D.haz), 
+                       pval=lm.D.haz, 
+                       qval=p.adjust(lm.D.haz, method='fdr'),
+                       coef=lm.D.haz.coef,
+                       SampleType=c("Duodenal"),
+                       Test=c("LM"),
+                       Covariates=c("Batch,Country,Sex,Age"),
+                       Outcome=c("HAZ"))
+
+#versus very simple LMs, in feces, adjusting for batch ONLY.
+#LINEAR MODELS, unadjusted data
+#Feces.
+#for example, for the first bile acid:
+summary(lm(allocholic_acid3sul_r~batch + stunted, data=bile_combat_output_F_meta))$coefficients
+summary(lm(allocholic_acid3sul_r~batch + stunted, data=bile_combat_output_F_meta))$coefficients[4,4] #is the p value for stunting
+
+lm.F.stunt = apply(df_fecesLM,2,
+              function(x) summary(lm(c(x)~bile_combat_output_F_meta$batch + 
+                                       bile_combat_output_F_meta$stunted))$coefficients[4,4])
+lm.F.stunt.coef = apply(df_fecesLM,2,
+              function(x) summary(lm(c(x)~bile_combat_output_F_meta$batch + 
+                                       bile_combat_output_F_meta$stunted))$coefficients[4,1])
+#add an FDR correct:
+lm.F.stunt0 <- data.frame(Bile_Acid=names(lm.F.stunt), 
+                       pval=lm.F.stunt, 
+                       qval=p.adjust(lm.F.stunt, method='fdr'),
+                       coef=lm.F.stunt.coef,
+                       SampleType=c("Feces"),
+                       Test=c("LM"),
+                       Covariates=c("Batch"),
+                       Outcome=c("Stunted"))
+lm_F_hits0 <- lm.F.stunt0 %>% filter(qval<0.05)
+lm_F_hits0 #none
+
+#versus HAZ
+lm.F.haz = apply(df_fecesLM,2,
+              function(x) summary(lm(c(x)~combat_input_F$batch + 
+                                       combat_input_F$haz_cont))$coefficients[4,4])
+lm.F.haz.coef = apply(df_fecesLM,2,
+              function(x) summary(lm(c(x)~combat_input_F$batch + 
+                                       combat_input_F$haz_cont))$coefficients[4,1])
+#add an FDR correct:
+lm.F.haz0 <- data.frame(Bile_Acid=names(lm.F.haz), 
+                       pval=lm.F.haz, 
+                       qval=p.adjust(lm.F.haz, method='fdr'),
+                       coef=lm.F.haz.coef,
+                       SampleType=c("Feces"),
+                       Test=c("LM"),
+                       Covariates=c("Batch"),
+                       Outcome=c("HAZ"))
+lm_F_hits0 <- lm.F.haz0 %>% filter(qval<0.05)
+lm_F_hits0 #no hits
+
+#combine the data:
+diff_stunting <- Reduce(full_join, list(lm.F.stunt2, lm.F.haz2, lm.G.haz2, lm.D.haz2,
+                                        lm.F.stunt1, lm.F.haz1, lm.G.haz1, lm.D.haz1,
+                                               p.res.stunt.f, p.res.haz.f, p.res.haz.d, p.res.haz.g))
+diff_stunting
+View(diff_stunting)
+
+#main hits
+diff_stunting[order(diff_stunting$pval),] %>% filter(qval<0.05)
+#main hits in simple linear models
+diff_stunting %>% filter(qval<0.05&Test=="LM") #there is only 1, basically, that passes.
+diff_stunting %>% filter(pval<0.05&Test=="LM")
+#write them out.
+#write.csv(diff_stunting, "/Users/khuus/ownCloud/KH-PhD/BileAcidsManuscript/Revisions_08.2026/stunting_results_revised.csv")
+
+diff_haz_sig <- diff_stunting %>% filter(qval<0.05)
+#so there are no small intestinal hits, that's why I don't have them.
+
+#what about the linear models of the same hits, do they at least remain significant after correction?
+diff_stunting %>% filter(SampleType=="Feces" & Bile_Acid %in% diff_haz_sig$Bile_Acid) 
+#I mean it's pretty borderline even at raw p value. #but the swapped version for lithoderivatives and HAZ is still sig.
+#should I have taken LOG of the bile acids no?
+
+```
+
+```{r Fig 2 repeated testing by stunting ABSOLUTE}
+##perform repeated spearman by country within sample type. (combat-adjusted data.) - for ABSOLUTE ABUNDANCES
+Xabs       = data_bile %>% dplyr::select( all_of(c(acids_abund_col, meta_cols ) )) %>%
+  group_by(SampleType) %>%
+  filter(!duplicated(id)) %>% #for most downstream analyses, remove the technical duplicates
+  ungroup()
+Fabs <- Xabs %>% filter(SampleType=="Feces")
+Dabs <- Xabs %>% filter(SampleType=="Duodenal")
+Gabs <- Xabs %>% filter(SampleType=="Gastric")
+
+rareF_abs <- gsub("_r", "", names(rareF))
+df_feces_abs <- Fabs %>% select(all_of(c(acids_abund_col))) %>% select(-any_of(rareF_abs)) #pick the right BAs
+dim(df_feces_abs) #78 bile acids left, hm.
+identical(df_feces_abs$allocholic_acid3sul, Fabs$allocholic_acid3sul) #confirm order ok
+
+rareG_abs <- gsub("_r", "", names(rareG))
+df_gas_abs <- Gabs %>% select(all_of(c(acids_abund_col))) %>% select(-any_of(rareG_abs)) #pick the right BAs
+dim(df_gas_abs) #77 bile acids left, hm.
+identical(df_gas_abs$allocholic_acid3sul, Gabs$allocholic_acid3sul) #confirm order ok
+
+rareD_abs <- gsub("_r", "", names(rareD))
+df_duo_abs <- Dabs %>% select(all_of(c(acids_abund_col))) %>% select(-any_of(rareD_abs)) #pick the right BAs
+dim(df_duo_abs) #77 bile acids left, hm.
+identical(df_duo_abs$allocholic_acid3sul, Dabs$allocholic_acid3sul) #confirm order ok
+
+#no combat correction. just raw values?
+
+#feces (HAZ)
+MS.p.feces.haz = apply(df_feces_abs,2,
+                 function(x) cor.test(c(x), Fabs$haz_cont, method='spearman')$p.value)
+MS.r.feces.haz = apply(df_feces_abs,2,
+                 function(x) cor.test(c(x), Fabs$haz_cont, method='spearman')$estimate)
+p.res.haz.f = data.frame(Bile_Acid=names(MS.p.feces.haz),
+                         pval=MS.p.feces.haz,
+                         coef=MS.r.feces.haz,
+                         SampleType=c("Feces"),
+                         Test=c("Spearman_ABS"),
+                         Outcome=c("HAZ"))
+# Perform multiple comparison correction using a given method of choice
+p.res.haz.f$qval <- p.adjust(p.res.haz.f$pval, method="fdr")
+p.res.haz.f.hits <- p.res.haz.f %>% filter(qval<0.05)
+p.res.haz.f.hits[order(p.res.haz.f.hits$pval),] #OK it's ok, with the batch corrected data we still get many lithocholic acid hits
+dim(p.res.haz.f.hits) #actually, there are still some hits, including litho-related hits.
+
+#feces (Stunted)
+MW.p.feces.stunt = apply(df_feces_abs,2,
+                 function(x) wilcox.test(c(x)~Fabs$stunted)$p.value)
+MW.p.feces.stunt.res = apply(df_feces_abs,2,
+                 function(x) wilcox.test(c(x)~Fabs$stunted)$statistic)
+p.res.stunt.f = data.frame(Bile_Acid=names(MW.p.feces.stunt),
+                         pval=MW.p.feces.stunt,
+                         coef=MW.p.feces.stunt.res,
+                         SampleType=c("Feces"),
+                         Test=c("Wilcoxon_ABS"),
+                         Outcome=c("Stunted"))
+# Perform multiple comparison correction using a given method of choice
+p.res.stunt.f$qval <- p.adjust(p.res.stunt.f$pval, method="fdr")
+p.res.stunt.f.hits <- p.res.stunt.f %>% filter(qval<0.05)
+p.res.stunt.f.hits #also still a handful of hits, including isolithocholic acid
+dim(p.res.stunt.f.hits)
+
+#duodenum
+MS.p.duo.haz = apply(df_duo_abs,2,
+                 function(x) cor.test(c(x), Dabs$haz_cont, method='spearman')$p.value)
+MS.r.duo.haz = apply(df_duo_abs,2,
+                 function(x) cor.test(c(x), Dabs$haz_cont, method='spearman')$estimate)
+p.res.haz.d = data.frame(Bile_Acid=names(MS.p.duo.haz),
+                         pval=MS.p.duo.haz,
+                         coef=MS.r.duo.haz,
+                         SampleType=c("Duodenal"),
+                         Test=c("Spearman_ABS"),
+                         Outcome=c("HAZ"))
+# Perform multiple comparison correction using a given method of choice
+p.res.haz.d$qval <- p.adjust(p.res.haz.d$pval, method="fdr")
+p.res.haz.d.hits <- p.res.haz.d %>% filter(qval<0.05)
+p.res.haz.d.hits #no hits
+dim(p.res.haz.d.hits) #no hits
+
+#gastric
+MS.p.gas.haz = apply(df_gas_abs,2,
+                 function(x) cor.test(c(x), Gabs$haz_cont, method='spearman')$p.value)
+MS.r.gas.haz = apply(df_gas_abs,2,
+                 function(x) cor.test(c(x), Gabs$haz_cont, method='spearman')$estimate)
+p.res.haz.g = data.frame(Bile_Acid=names(MS.p.gas.haz),
+                         pval=MS.p.gas.haz,
+                         coef=MS.r.gas.haz,
+                         SampleType=c("Gastric"),
+                         Test=c("Spearman_ABS"),
+                         Outcome=c("HAZ"))
+p.res.haz.g$qval <- p.adjust(p.res.haz.g$pval, method="fdr")
+p.res.haz.g.hits <- p.res.haz.g %>% filter(qval<0.05) #no hits
+p.res.haz.g.hits
+dim(p.res.haz.g.hits) #no hits
+
+#LINEAR MODELS, absolute data
+#how are the bile acids distributed. Mostly left skewed. 
+hist(df_feces_abs$twelveketocdc_acid)
+hist(log(df_feces_abs$twelveketocdc_acid)) #better
+hist(df_feces_abs$lithocholic_acid)
+hist(log(df_feces_abs$lithocholic_acid)) #better ish, now right skewed
+hist(df_feces_abs$cholic_acid)
+hist(log(df_feces_abs$cholic_acid)) #better
+hist(df_feces_abs$chenodeoxycholic_acid)
+hist(log(df_feces_abs$chenodeoxycholic_acid)) #better
+#before doing linear models: log transform the data? (#CLR would be for rel abund, log ok for absolute)
+#FIX: a few bile acids are undetected across ALL of feces (all zero/NA) - for those,
+#min(col[col>0]) has nothing to take the min of and returns Inf, which blows up the
+#log below. Drop them from the modeled set (they carry no signal in this compartment anyway).
+nosignal_feces <- names(df_feces_abs)[sapply(df_feces_abs, function(col) all(is.na(col) | col == 0))]
+nosignal_feces #bile acids with zero detectable signal in feces - excluded below
+#in addition: drop bile acids that are all zero in only one batch.
+#- glycoallocholic_acid and tauroallocholic_acid are NA for all 259 samples in batch 1, and present in batches 2/3.
+#- tauroudc_hdc, chenodeoxycholic_acid3gluc, chenodeoxycholic_acid3sul are NA for all 249 samples in batch 3.
+batch_feces <- c("glycoallocholic_acid", "tauroallocholic_acid", "tauroudc_hdc", "chenodeoxycholic_acid3gluc", "chenodeoxycholic_acid3sul")
+
+df_feces_abs_log <- as.data.frame(mapply(function(col) {
+  pc <- min(col[col > 0], na.rm = TRUE) / 2
+  log(col + pc)
+}, df_feces_abs %>% select(-any_of(c(nosignal_feces, batch_feces)))))
+hist(df_feces_abs_log$twelveketocdc_acid) #OK - kept zeros, plus normal ish er distribution
+hist(df_feces_abs_log$lithocholic_acid) #OK ish.
+
+nosignal_duo <- names(df_duo_abs)[sapply(df_duo_abs, function(col) all(is.na(col) | col == 0))]
+nosignal_duo
+
+batch_dg <- c("glycoallocholic_acid", "tauroallocholic_acid", "tauroudc_hdc", "chenodeoxycholic_acid3gluc", "chenodeoxycholic_acid3sul", "hyodeoxycholic_acid")
+df_duo_abs_log <- as.data.frame(mapply(function(col) {
+  pc <- min(col[col > 0], na.rm = TRUE) / 2
+  log(col + pc)
+}, df_duo_abs %>% select(-any_of(c(nosignal_duo, batch_dg)))))
+hist(df_duo_abs_log$twelveketocdc_acid) #OK - kept zeros, plus normal ish er distribution
+hist(df_duo_abs_log$lithocholic_acid) #OK ish.
+
+nosignal_gas <- names(df_gas_abs)[sapply(df_gas_abs, function(col) all(is.na(col) | col == 0))]
+nosignal_gas
+
+df_gas_abs_log <- as.data.frame(mapply(function(col) {
+  pc <- min(col[col > 0], na.rm = TRUE) / 2
+  log(col + pc)
+}, df_gas_abs %>% select(-any_of(c(nosignal_gas, batch_dg)))))
+hist(df_gas_abs_log$lithocholic_acid) #OK ish.
+
+
+#Feces.
+#for example, for the first bile acid:
+summary(lm(allocholic_acid3sul~batch + pays + sexe + age + calprotectineggdeps + aatmggdeps + stunted, data=Fabs))$coefficients
+summary(lm(allocholic_acid3sul~batch + pays + sexe + age + calprotectineggdeps + aatmggdeps + stunted, data=Fabs))$coefficients[9,4] #is the p value for stunting
+
+lm.F.stunt = apply(df_feces_abs_log,2,
+              function(x) summary(lm(c(x)~Fabs$batch + 
+                                       Fabs$pays +
+                                       Fabs$sexe + 
+                                       Fabs$age + 
+                                       Fabs$calprotectineggdeps +
+                                       Fabs$aatmggdeps + 
+                                       Fabs$stunted))$coefficients[9,4])
+lm.F.stunt.coef = apply(df_feces_abs_log,2,
+              function(x) summary(lm(c(x)~Fabs$batch + 
+                                       Fabs$pays +
+                                       Fabs$sexe + 
+                                       Fabs$age + 
+                                       Fabs$calprotectineggdeps +
+                                       Fabs$aatmggdeps + 
+                                       Fabs$stunted))$coefficients[9,1])
+#add an FDR correct:
+lm.F.stunt2 <- data.frame(Bile_Acid=names(lm.F.stunt), 
+                       pval=lm.F.stunt, 
+                       qval=p.adjust(lm.F.stunt, method='fdr'),
+                       coef=lm.F.stunt.coef,
+                       SampleType=c("Feces"),
+                       Test=c("LM_cov"),
+                       Covariates=c("Batch,Country,Sex,Age,Calpro,AAT"),
+                       Outcome=c("Stunted"))
+lm_F_hits <- lm.F.stunt2 %>% filter(qval<0.05)
+lm_F_hits #none
+
+#versus HAZ
+lm.F.haz = apply(df_feces_abs_log,2,
+              function(x) summary(lm(c(x)~Fabs$batch + 
+                                       Fabs$pays +
+                                       Fabs$sexe + 
+                                       Fabs$age + 
+                                       Fabs$calprotectineggdeps +
+                                       Fabs$aatmggdeps + 
+                                       Fabs$haz_cont))$coefficients[9,4])
+lm.F.haz.coef = apply(df_feces_abs_log,2,
+              function(x) summary(lm(c(x)~Fabs$batch + 
+                                       Fabs$pays +
+                                       Fabs$sexe + 
+                                       Fabs$age + 
+                                       Fabs$calprotectineggdeps +
+                                       Fabs$aatmggdeps + 
+                                       Fabs$haz_cont))$coefficients[9,1])
+#add an FDR correct:
+lm.F.haz2 <- data.frame(Bile_Acid=names(lm.F.haz), 
+                       pval=lm.F.haz, 
+                       qval=p.adjust(lm.F.haz, method='fdr'),
+                       coef=lm.F.haz.coef,
+                       SampleType=c("Feces"),
+                       Test=c("LM_cov"),
+                       Covariates=c("Batch,Country,Sex,Age,Calpro,AAT"),
+                       Outcome=c("HAZ"))
+lm_F_hits <- lm.F.haz2 %>% filter(qval<0.05)
+lm_F_hits #no hits
+
+#Gastric#versus HAZ
+lm.G.haz = apply(df_gas_abs_log,2,
+              function(x) summary(lm(c(x)~Gabs$batch + 
+                                       Gabs$pays +
+                                       Gabs$sexe + 
+                                       Gabs$age + 
+                                       Gabs$calprotectinesurliquideduodn +
+                                       Gabs$aatsurldmgml + 
+                                       Gabs$haz_cont))$coefficients[9,4])
+lm.G.haz.coef = apply(df_gas_abs_log,2,
+              function(x) summary(lm(c(x)~Gabs$batch + 
+                                       Gabs$pays +
+                                       Gabs$sexe + 
+                                       Gabs$age + 
+                                       Gabs$calprotectinesurliquideduodn +
+                                       Gabs$aatsurldmgml + 
+                                       Gabs$haz_cont))$coefficients[9,1])
+#add an FDR correct:
+lm.G.haz2 <- data.frame(Bile_Acid=names(lm.G.haz), 
+                       pval=lm.G.haz, 
+                       qval=p.adjust(lm.G.haz, method='fdr'),
+                       coef=lm.G.haz.coef,
+                       SampleType=c("Gastric"),
+                       Test=c("LM_cov"),
+                       Covariates=c("Batch,Country,Sex,Age,Calpro,AAT"),
+                       Outcome=c("HAZ"))
+lm.G.haz2_hits <- lm.G.haz2 %>% filter(qval<0.05)
+lm.G.haz2_hits #none
+
+#Duodenum#versus HAZ
+lm.D.haz = apply(df_duo_abs_log,2,
+              function(x) summary(lm(c(x)~Dabs$batch + 
+                                       Dabs$pays +
+                                       Dabs$sexe + 
+                                       Dabs$age + 
+                                       Dabs$calprotectinesurliquideduodn +
+                                       Dabs$aatsurldmgml + 
+                                       Dabs$haz_cont))$coefficients[9,4])
+lm.D.haz.coef = apply(df_duo_abs_log,2,
+              function(x) summary(lm(c(x)~Dabs$batch + 
+                                       Dabs$pays +
+                                       Dabs$sexe + 
+                                       Dabs$age + 
+                                       Dabs$calprotectinesurliquideduodn +
+                                       Dabs$aatsurldmgml + 
+                                       Dabs$haz_cont))$coefficients[9,1])
+
+#add an FDR correct:
+lm.D.haz2 <- data.frame(Bile_Acid=names(lm.D.haz), 
+                       pval=lm.D.haz, 
+                       qval=p.adjust(lm.D.haz, method='fdr'),
+                       coef=lm.D.haz.coef,
+                       SampleType=c("Duodenal"),
+                       Test=c("LM_cov"),
+                       Covariates=c("Batch,Country,Sex,Age,Calpro,AAT"),
+                       Outcome=c("HAZ"))
+lm.D.haz2_hits <- lm.D.haz2 %>% filter(qval<0.05)
+lm.D.haz2_hits #none
+
+##add models where there are NOT additional covariates, but only basic (sex, age, batch) - REVISIONS
+#LINEAR MODELS, unadjusted data
+#Feces.
+#for example, for the first bile acid:
+summary(lm(allocholic_acid3sul_r~batch + pays + sexe + age + stunted, data=bile_combat_output_F_meta))$coefficients
+summary(lm(allocholic_acid3sul_r~batch + pays + sexe + age + stunted, data=bile_combat_output_F_meta))$coefficients[7,4] #is the p value for stunting
+
+lm.F.stunt = apply(df_feces_abs_log,2,
+              function(x) summary(lm(c(x)~Fabs$batch + 
+                                       Fabs$pays +
+                                       Fabs$sexe + 
+                                       Fabs$age + 
+                                       Fabs$stunted))$coefficients[7,4])
+lm.F.stunt.coef = apply(df_feces_abs_log,2,
+              function(x) summary(lm(c(x)~Fabs$batch + 
+                                       Fabs$pays +
+                                       Fabs$sexe + 
+                                       Fabs$age + 
+                                       Fabs$stunted))$coefficients[7,1])
+#add an FDR correct:
+lm.F.stunt1 <- data.frame(Bile_Acid=names(lm.F.stunt), 
+                       pval=lm.F.stunt, 
+                       qval=p.adjust(lm.F.stunt, method='fdr'),
+                       coef=lm.F.stunt.coef,
+                       SampleType=c("Feces"),
+                       Test=c("LM"),
+                       Covariates=c("Batch,Country,Sex,Age"),
+                       Outcome=c("Stunted"))
+lm_F_hits <- lm.F.stunt1 %>% filter(qval<0.05)
+lm_F_hits #same result as before, sixsevenketolithocholic acid 
+
+#versus HAZ
+lm.F.haz = apply(df_feces_abs_log,2,
+              function(x) summary(lm(c(x)~Fabs$batch + 
+                                       Fabs$pays +
+                                       Fabs$sexe + 
+                                       Fabs$age + 
+                                       Fabs$haz_cont))$coefficients[7,4])
+lm.F.haz.coef = apply(df_feces_abs_log,2,
+              function(x) summary(lm(c(x)~Fabs$batch + 
+                                       Fabs$pays +
+                                       Fabs$sexe + 
+                                       Fabs$age + 
+                                       Fabs$haz_cont))$coefficients[7,1])
+#add an FDR correct:
+lm.F.haz1 <- data.frame(Bile_Acid=names(lm.F.haz), 
+                       pval=lm.F.haz, 
+                       qval=p.adjust(lm.F.haz, method='fdr'),
+                       coef=lm.F.haz.coef,
+                       SampleType=c("Feces"),
+                       Test=c("LM"),
+                       Covariates=c("Batch,Country,Sex,Age"),
+                       Outcome=c("HAZ"))
+lm_F_hits <- lm.F.haz1 %>% filter(qval<0.05)
+lm_F_hits #same as above
+
+#Gastric#versus HAZ
+lm.G.haz = apply(df_gas_abs_log,2,
+              function(x) summary(lm(c(x)~Gabs$batch + 
+                                       Gabs$pays +
+                                       Gabs$sexe + 
+                                       Gabs$age + 
+                                       Gabs$haz_cont))$coefficients[7,4])
+lm.G.haz.coef = apply(df_gas_abs_log,2,
+              function(x) summary(lm(c(x)~Gabs$batch + 
+                                       Gabs$pays +
+                                       Gabs$sexe + 
+                                       Gabs$age + 
+                                       Gabs$calprotectinesurliquideduodn +
+                                       Gabs$aatsurldmgml + 
+                                       Gabs$haz_cont))$coefficients[7,1])
+#add an FDR correct:
+lm.G.haz1 <- data.frame(Bile_Acid=names(lm.G.haz), 
+                       pval=lm.G.haz, 
+                       qval=p.adjust(lm.G.haz, method='fdr'),
+                       coef=lm.G.haz.coef,
+                       SampleType=c("Gastric"),
+                       Test=c("LM"),
+                       Covariates=c("Batch,Country,Sex,Age"),
+                       Outcome=c("HAZ"))
+
+#Duodenum#versus HAZ
+lm.D.haz = apply(df_duo_abs_log,2,
+              function(x) summary(lm(c(x)~Dabs$batch + 
+                                       Dabs$pays +
+                                       Dabs$sexe + 
+                                       Dabs$age + 
+                                       Dabs$haz_cont))$coefficients[7,4])
+lm.D.haz.coef = apply(df_duo_abs_log,2,
+              function(x) summary(lm(c(x)~Dabs$batch + 
+                                       Dabs$pays +
+                                       Dabs$sexe + 
+                                       Dabs$age + 
+                                       Dabs$haz_cont))$coefficients[7,1])
+#add an FDR correct:
+lm.D.haz1 <- data.frame(Bile_Acid=names(lm.D.haz), 
+                       pval=lm.D.haz, 
+                       qval=p.adjust(lm.D.haz, method='fdr'),
+                       coef=lm.D.haz.coef,
+                       SampleType=c("Duodenal"),
+                       Test=c("LM"),
+                       Covariates=c("Batch,Country,Sex,Age"),
+                       Outcome=c("HAZ"))
+
+#combine the data:
+diff_stunting_abs <- Reduce(full_join, list(lm.F.stunt2, lm.F.haz2, lm.G.haz2, lm.D.haz2,
+                                        lm.F.stunt1, lm.F.haz1, lm.G.haz1, lm.D.haz1,
+                                               p.res.stunt.f, p.res.haz.f, p.res.haz.d, p.res.haz.g))
+diff_stunting_abs
+View(diff_stunting_abs)
+
+#main hits
+diff_stunting_abs[order(diff_stunting_abs$pval),] %>% filter(qval<0.05)
+#main hits in simple linear models
+diff_stunting_abs %>% filter(qval<0.05&Test=="LM") #there is only 1, basically, that passes.
+diff_stunting_abs %>% filter(pval<0.05&Test=="LM")
+#write them out.
+#write.csv(diff_stunting_abs, "/Users/khuus/ownCloud/KH-PhD/BileAcidsManuscript/Revisions_08.2026/stunting_results_abs_revised.csv")
+
+```
+
+```{r compare rel and abs stunting}
+##COMPARE the results from the absolute stunting values and the original, relative abundance analyses. 
+#diff_stunting_abs #all results from the absolute values
+#diff_stunting #all results from the rel abund values, also the combat corrected ones.
+
+#how best to compare? probably based on significance cutoffs, per test and sample type.
+#diff_stunting_abs_p05 <- diff_stunting_abs %>% filter(pval<0.05)  #take raw for flexibility
+#diff_stunting_p05 <- diff_stunting %>% filter(pval<0.05) 
+#remove the 'rel abund' flag of all bile acids in the rel abund datA
+#diff_stunting_p05$Bile_Acid <- gsub("_r", "", diff_stunting_p05$Bile_Acid)
+
+#the two chunks label the same test differently 
+#diff_stunting_abs_p05$TestType <- gsub("_ABS$", "", diff_stunting_abs_p05$Test)
+#diff_stunting_p05$TestType     <- gsub("_combat$", "", diff_stunting_p05$Test)
+
+
+#group by test type, SampleType, Outcome and compare how many bile acids overlap.
+#combined <- bind_rows(
+#  diff_stunting_abs_p05 %>% ungroup() %>% mutate(source = "absolute"),
+#  diff_stunting_p05 %>% ungroup() %>% mutate(source = "compositional")
+#) %>%
+#  distinct(SampleType, TestType, Outcome, Bile_Acid, source) %>%
+#  group_by(SampleType, TestType, Outcome, Bile_Acid) %>%
+#  dplyr::summarise(sources = paste(sort(source), collapse = "_"), .groups = "drop") %>%
+#  dplyr::count(SampleType, TestType, Outcome, sources, name = "n_bile_acids") %>%
+#  pivot_wider(names_from = sources, values_from = n_bile_acids, values_fill = 0)
+
+#combined #hm. Is this helpful??
+
+#OK how about this: we simply join the tables.
+diff_stunting_rel_join <- diff_stunting %>% dplyr::rename(pval_rel=pval, qval_rel=qval, coef_rel=coef)
+diff_stunting_abs_join <- diff_stunting_abs %>% dplyr::rename(pval_abs=pval, qval_abs=qval,
+                                                  coef_abs=coef)
+#remove the 'rel abund' flag of all bile acids in the rel abund datA
+diff_stunting_rel_join$Bile_Acid <- gsub("_r", "", diff_stunting_rel_join$Bile_Acid)
+
+#the two chunks label the same test differently 
+diff_stunting_abs_join$Test <- gsub("_ABS$", "", diff_stunting_abs_join$Test)
+diff_stunting_rel_join$Test     <- gsub("_combat$", "", diff_stunting_rel_join$Test)
+
+diff_stunting_compare <- full_join(diff_stunting_rel_join, diff_stunting_abs_join)
+View(diff_stunting_compare) #there it is, finally.
+diff_stunting_compare$qboth <- ifelse(diff_stunting_compare$qval_rel<0.05&diff_stunting_compare$qval_abs<0.05, "yes", "no")
+diff_stunting_compare$pboth <- ifelse(diff_stunting_compare$pval_rel<0.05&diff_stunting_compare$pval_abs<0.05, "yes", "no")
+
+#write.csv(diff_stunting_compare, "/Users/khuus/ownCloud/KH-PhD/BileAcidsManuscript/Revisions_08.2026/stunting_results_abs_vs_rel_compare.csv")
+
+#test a few little dplyr statistics for the reviewers
+diff_stunting_compare_sig <- diff_stunting_compare %>% filter(qval_rel<0.05) #compare based on hits
+dim(diff_stunting_compare_sig) #46 original hits
+dplyr::count(diff_stunting_compare_sig, pboth) %>% mutate(per=n/sum(n)*100) #71.7%
+dplyr::count(diff_stunting_compare_sig, qboth) %>% mutate(per=n/sum(n)*100) #71.7%
+
+```
+
+```{r Fig 2 repeated testing by stunting rel nonparametric no ComBat}
+#repeat the non-parametric tests on non-ComBat-corrected data, relative abundance.
+#use the same df as above for LM, this just means it is log-adjusted rel abund, no ComBat
+#feces (HAZ)
+MS.p.feces.haz = apply(df_fecesLM,2,
+                 function(x) cor.test(c(x), bile_combat_output_F_meta$haz_cont, method='spearman')$p.value)
+MS.r.feces.haz = apply(df_fecesLM,2,
+                 function(x) cor.test(c(x), bile_combat_output_F_meta$haz_cont, method='spearman')$estimate)
+p.res.haz.f = data.frame(Bile_Acid=names(MS.p.feces.haz),
+                         pval=MS.p.feces.haz,
+                         coef=MS.r.feces.haz,
+                         SampleType=c("Feces"),
+                         Test=c("Spearman"),
+                         Outcome=c("HAZ"))
+# Perform multiple comparison correction using a given method of choice
+p.res.haz.f$qval <- p.adjust(p.res.haz.f$pval, method="fdr")
+p.res.haz.f.hits <- p.res.haz.f %>% filter(qval<0.05)
+p.res.haz.f.hits[order(p.res.haz.f.hits$pval),] #OK it's ok, with the batch corrected data we still get many lithocholic acid hits
+dim(p.res.haz.f.hits) #indeed, the same results come out nicely.
+
+#feces (Stunted)
+MW.p.feces.stunt = apply(df_fecesLM,2,
+                 function(x) wilcox.test(c(x)~bile_combat_output_F_meta$stunted)$p.value)
+MW.p.feces.stunt.res = apply(df_fecesLM,2,
+                 function(x) wilcox.test(c(x)~bile_combat_output_F_meta$stunted)$statistic)
+p.res.stunt.f = data.frame(Bile_Acid=names(MW.p.feces.stunt),
+                         pval=MW.p.feces.stunt,
+                         coef=MW.p.feces.stunt.res,
+                         SampleType=c("Feces"),
+                         Test=c("Wilcoxon"),
+                         Outcome=c("Stunted"))
+# Perform multiple comparison correction using a given method of choice
+p.res.stunt.f$qval <- p.adjust(p.res.stunt.f$pval, method="fdr")
+p.res.stunt.f.hits <- p.res.stunt.f %>% filter(qval<0.05)
+p.res.stunt.f.hits
+dim(p.res.stunt.f.hits) #indeed, the same results come out nicely.
+
+#duodenum
+MS.p.duo.haz = apply(df_duoLM,2,
+                 function(x) cor.test(c(x), bile_combat_output_D_meta$haz_cont, method='spearman')$p.value)
+MS.r.duo.haz = apply(df_duoLM,2,
+                 function(x) cor.test(c(x), bile_combat_output_D_meta$haz_cont, method='spearman')$estimate)
+p.res.haz.d = data.frame(Bile_Acid=names(MS.p.duo.haz),
+                         pval=MS.p.duo.haz,
+                         coef=MS.r.duo.haz,
+                         SampleType=c("Duodenal"),
+                         Test=c("Spearman"),
+                         Outcome=c("HAZ"))
+# Perform multiple comparison correction using a given method of choice
+p.res.haz.d$qval <- p.adjust(p.res.haz.d$pval, method="fdr")
+p.res.haz.d.hits <- p.res.haz.d %>% filter(qval<0.05)
+p.res.haz.d.hits #no hits
+dim(p.res.haz.d.hits)
+
+#gastric
+MS.p.gas.haz = apply(df_gasLM,2,
+                 function(x) cor.test(c(x), bile_combat_output_G_meta$haz_cont, method='spearman')$p.value)
+MS.r.gas.haz = apply(df_gasLM,2,
+                 function(x) cor.test(c(x), bile_combat_output_G_meta$haz_cont, method='spearman')$estimate)
+p.res.haz.g = data.frame(Bile_Acid=names(MS.p.gas.haz),
+                         pval=MS.p.gas.haz,
+                         coef=MS.r.gas.haz,
+                         SampleType=c("Gastric"),
+                         Test=c("Spearman"),
+                         Outcome=c("HAZ"))
+p.res.haz.g$qval <- p.adjust(p.res.haz.g$pval, method="fdr")
+p.res.haz.g.hits <- p.res.haz.g %>% filter(qval<0.05) #no hits
+p.res.haz.g.hits
+dim(p.res.haz.g.hits) #none
+
+#combine the data, onparametric, no combat:
+diff_stunting2 <- Reduce(full_join, list(p.res.stunt.f, p.res.haz.f, p.res.haz.d, p.res.haz.g))
+diff_stunting2
+
+#write them out.
+#write.csv(diff_stunting2, "/Users/khuus/ownCloud/KH-PhD/BileAcidsManuscript/Revisions_08.2026/stunting_results_nonparametric_noComBat_revised.csv")
+
+
+```
+## Figure 2A
+```{r Fig 2 stunting plots}
+##Fig 2: Differences in Bile Acids by Stunting Status
+#reminder main hits:
+diff_stunting[order(diff_stunting$pval),] %>% filter(qval<0.05)
+feces$stunted <- factor(feces$stunted, levels=c("non-stunted", "stunted"))
+
+#Lithocholic acid only
+fig2A <- ggplot(feces, aes(y=lithocholic_acid_r, x=stunted)) + geom_boxplot(outlier.shape=NA) + geom_jitter(width=0.1, height=0) + 
+  theme(panel.background = element_blank(), axis.line = element_line(colour = "black"),
+               axis.title.y = element_text(margin = margin(r = 10))) + 
+  xlab("Stunting") + ylab("Relative abundance (%)") + ggtitle("Lithocholic acid") + 
+  annotate('segment', x=1, xend=2, y=98, yend=98) + annotate('text', label=("***"), x=1.5, y=100)
+fig2A
+
+pdf("../../Figure_panels/Figure2A.pdf", height = 4, width = 4)
+fig2A
+dev.off()
+
+source_data_2A <- feces %>% select(lithocholic_acid_r, stunted)
+
+write.csv2(source_data_2A, "../../Source_data/Figure2A.csv")
+
+wilcox.test(lithoderivatives_r ~ stunted, data = feces) #p-value = 0.00017
+
+```
+## Figure 2B
+```{r}
+#Create plots: Lithoderivatives by stunting status
+fig2B <- ggplot(feces, aes(y=lithoderivatives_r, x=stunted)) + geom_boxplot(outlier.shape=NA) + 
+  geom_jitter(width=0.1, height=0) + 
+  theme(panel.background = element_blank(), axis.line = element_line(colour = "black"),
+               axis.title.y = element_text(margin = margin(r = 10))) + 
+  xlab("Stunting") + ylab("Relative abundance (%)") + ggtitle("Lithocholic acid and derivatives") +
+  annotate('segment', x=1, xend=2, y=98, yend=98) + annotate('text', label=("***"), x=1.5, y=100)
+
+pdf("../../Figure_panels/Figure2B.pdf", height = 4, width = 4)
+fig2B
+dev.off()
+
+source_data_2B <- feces %>% select(lithoderivatives_r, stunted)
+
+write.csv2(source_data_2B, "../../Source_data/Figure2B.csv")
+
+wilcox.test(lithoderivatives_r ~ stunted, data = X_groupedFeces) #p-value = 0.0008243
+one.way <- kruskal.test(lithoderivatives_r ~ haz2, data = X_groupedFeces)
+one.way # 0.0013 **
+
+```
+## Figure 2C
+```{r}
+#versus HAZ
+#check the spearman stats
+diff_stunting %>% filter(Bile_Acid=="lithocholic_acid_r"&qval<0.05)
+
+#pdf("plots/2C_LithocholicAcid_FecesHAZ.pdf", width=4, height=4)
+fig2C <- ggplot(feces, aes(y=lithocholic_acid_r, x=haz_cont)) + geom_point() + geom_smooth(method='lm') +
+  theme(panel.background = element_blank(), axis.line = element_line(colour = "black"),
+               axis.title.y = element_text(margin = margin(r = 10))) + 
+  xlab("HAZ") + ylab("Relative abundance (%)") + ggtitle("Lithocholic acid") +
+  annotate("text", x=1.5, y=10, label=c("p=0.003\nrho=0.1"))
+
+pdf("../../Figure_panels/Figure2C.pdf", height = 4, width = 4)
+fig2C
+dev.off()
+
+source_data_2C <- feces %>% select(lithocholic_acid_r, haz_cont)
+
+write.csv2(source_data_2C, "../../Source_data/Figure2C.csv")
+
+```
+## Figure 2D
+```{r}
+#pdf("plots/2D_UrsoFecesstunted.pdf", width=4, height=4)
+fig2D <- ggplot(feces, aes(y=urso_r, x=stunted)) + geom_boxplot(outlier.shape=NA) + 
+  geom_jitter(width=0.1, height=0) +
+  theme(panel.background = element_blank(), axis.line = element_line(colour = "black"),
+               axis.title.y = element_text(margin = margin(r = 10))) + 
+  xlab("Stunting") + ylab("Relative abundance (%)") + ggtitle("Ursocholic acid and derivatives") + 
+  annotate('segment', x=1, xend=2, y=50, yend=50) + annotate('text', label=("***"), x=1.5, y=52)
+
+pdf("../../Figure_panels/Figure2D.pdf", height = 4, width = 4)
+fig2D
+dev.off()
+
+source_data_2D <- feces %>% select(urso_r, stunted)
+
+write.csv2(source_data_2D, "../../Source_data/Figure2D.csv")
+
+wilcox.test(urso_r ~ stunted, data = X_groupedFeces) #p-value = 4.2e-05
+one.way <- kruskal.test(urso_r ~ haz2, data = X_groupedFeces)
+one.way # 0.0002 **
+```
+
+```{r}
+#pdf("plots/LithoderivativesDuodenumstunted.pdf", width=4, height=4)
+p <- ggplot(X_groupedDuodenal, aes(y=lithoderivatives_r, x=haz)) + geom_boxplot(outlier.shape=NA) + geom_jitter(width=0.1, height=0)
+p <- p + theme(panel.background = element_blank(), axis.line = element_line(colour = "black"),
+               axis.title.y = element_text(margin = margin(r = 10)))
+p <- p + xlab("Stunting") + ylab("Relative abundance (%)") + ggtitle("Lithocholic acid and derivatives")
+#p <- p + annotate('segment', x=1, xend=2, y=98, yend=98) + annotate('text', label=("***"), x=1.5, y=100)
+p
+#dev.off()
+
+wilcox.test(lithoderivatives_r ~ haz, data = X_groupedDuodenal) #p-value = 0.78
+
+#pdf("plots/UrsoderivativesDuodenumstunted.pdf", width=4, height=4)
+p <- ggplot(X_groupedDuodenal, aes(y=urso_r, x=haz)) + geom_boxplot(outlier.shape=NA) + geom_jitter(width=0.1, height=0)
+p <- p + theme(panel.background = element_blank(), axis.line = element_line(colour = "black"),
+               axis.title.y = element_text(margin = margin(r = 10)))
+p <- p + xlab("Stunting") + ylab("Relative abundance (%)") + ggtitle("Ursocholic acid and derivatives")
+#p <- p + annotate('segment', x=1, xend=2, y=98, yend=98) + annotate('text', label=("***"), x=1.5, y=100)
+p
+#dev.off()
+
+wilcox.test(urso_r ~ haz, data = X_groupedDuodenal) #p-value = 0.78
+
+#mostly sparse - I would not trust these results because it is so heavily zero skewed.
+#pdf("plots/LithocholicAcid24GlucDuodenumHAZ.pdf", width=4, height=4)
+p <- ggplot(duodenal, aes(y=lithocholic_acid24gluc_r, x=haz_cont)) + geom_point() + geom_smooth(method='lm')
+p <- p + theme(panel.background = element_blank(), axis.line = element_line(colour = "black"),
+               axis.title.y = element_text(margin = margin(r = 10)))
+#p <- p + xlab("Stunting") + ylab("Relative abundance (%)") + ggtitle("Lithocholic acid and derivatives")
+p
+#dev.off()
+```
+## Figure 2F
+```{r}
+##for reviewer 3: plot the absolute abundance data as ratios, LCA/CDCA, and DCA/CA
+#Define ratios, absolute
+head(Fabs) #the absolute data, fecal, including metadata.
+summary(Fabs$chenodeoxycholic_acid) #there are some zeros
+summary(Fabs$cholic_acid) #there are some zeros 
+Fabs$LCA_CDCA_ratio <- Fabs$lithocholic_acid / (Fabs$chenodeoxycholic_acid)
+Fabs$LCA_CDCA_ratio <- ifelse(Fabs$LCA_CDCA_ratio==Inf, yes = Fabs$lithocholic_acid/(Fabs$chenodeoxycholic_acid + min(Fabs$chenodeoxycholic_acid[which(Fabs$chenodeoxycholic_acid!=0)])/2), no=Fabs$LCA_CDCA_ratio) #instead of zero, impute as half minimum
+Fabs$DCA_CA_ratio <- Fabs$deoxycholic_acid / Fabs$cholic_acid
+Fabs$DCA_CA_ratio <- ifelse(Fabs$DCA_CA_ratio==Inf, yes = Fabs$deoxycholic_acid/(Fabs$cholic_acid + min(Fabs$cholic_acid[which(Fabs$cholic_acid!=0)])/2), no=Fabs$DCA_CA_ratio)
+
+
+#plot and test ratios by stunting status
+Fabs$stunted <- factor(Fabs$stunted, levels=c("non-stunted", "stunted"))
+fig2F <- ggplot(Fabs, aes(x=stunted, y=log(LCA_CDCA_ratio))) + geom_boxplot(outlier.shape=NA) + 
+  geom_jitter(width=0.1, height=0) +
+  theme(panel.background = element_blank(), axis.line = element_line(colour = "black"),
+               axis.title.y = element_text(margin = margin(r = 10))) +
+  xlab("Stunting") + ylab("LCA:CDCA Log Ratio") + ggtitle("LCA:CDCA Conversion") + 
+  annotate('segment', x=1, xend=2, y=10, yend=10) + annotate('text', label=("***"), x=1.5, y=11)
+
+pdf("../../Figure_panels/Figure2F.pdf", height = 4, width = 4)
+fig2F
+dev.off()
+
+source_data_2F <- Fabs %>% select(stunted, LCA_CDCA_ratio)
+
+write.csv2(source_data_2F, "../../Source_data/Figure2F.csv")
+
+#test significance.
+wilcox.test(Fabs$LCA_CDCA_ratio~Fabs$stunted) #p=5.7e-05 #hurrah!
+wilcox_effsize(Fabs, LCA_CDCA_ratio ~ stunted, ci = TRUE) # 
+```
+## Figure 2G
+```{r}
+fig2G <- ggplot(Fabs, aes(x=stunted, y=log(DCA_CA_ratio))) + geom_boxplot(outlier.shape=NA) + 
+  geom_jitter(width=0.1, height=0) +
+  theme(panel.background = element_blank(), axis.line = element_line(colour = "black"),
+               axis.title.y = element_text(margin = margin(r = 10))) +
+  xlab("Stunting") + ylab("DCA:CA Log Ratio") + ggtitle("DCA:CA Conversion") + 
+  annotate('segment', x=1, xend=2, y=10, yend=10) + annotate('text', label=("**"), x=1.5, y=11)
+
+pdf("../../Figure_panels/Figure2G.pdf", height = 4, width = 4)
+fig2G
+dev.off()
+
+source_data_2G <- Fabs %>% select(stunted, DCA_CA_ratio)
+
+write.csv2(source_data_2G, "../../Source_data/Figure2G.csv")
+
+#test significance.
+wilcox.test(Fabs$DCA_CA_ratio~Fabs$stunted) #p=0.008
+wilcox_effsize(Fabs, DCA_CA_ratio ~ stunted, ci = TRUE)
+```
+## Figure 2E
+```{r Fig 2E stunting heatmap REVISED}
+##REVISED version of this heatmap: as per reviewer 3 concerned about ComBat: pick the bile acids based on non-ComBat-corrected nonparametric test results, and star based on LM
+
+#first: summarize the mean value of each bile acid per stunting status.
+#since this is a stunting heatmap, take stunting hits only, not HAZ
+stunting_all <- full_join(diff_stunting, diff_stunting2)
+diff_stunt_sig <- stunting_all %>% filter(Test%in%c("Wilcoxon","Wilcoxon_combat")&qval<0.05&Outcome=="Stunted")
+to_summarize <- feces %>% dplyr::select(all_of(c(diff_stunt_sig$Bile_Acid, 'stunted'))) #take the hits only #from raw data (?) 
+to_summarize[is.na(to_summarize)] <- 0 #0 is 0, no NAs
+AverageByStunt <- to_summarize %>% dplyr::group_by(stunted) %>% 
+  dplyr::summarize_all(mean, na.rm=TRUE) #take 3 categories to visualize
+AverageByStunt #nice :) 
+AverageByStunt <- AverageByStunt %>% pivot_longer(cols=c(2:length(names(AverageByStunt))),
+                                                            names_to="Bile_Acid", values_to="Relative_Abundance")
+AverageByStunt #double nice :) 
+AverageByStunt <- AverageByStunt[order(AverageByStunt$Relative_Abundance),]
+
+pdata <- AverageByStunt 
+mylevels <- pdata %>% filter(stunted=='stunted')
+pdata$Bile_Acid <- factor(pdata$Bile_Acid, levels=mylevels$Bile_Acid)
+
+#sig hits #filter now for must be sig WITH and WITHOUT Combat
+with_combat <- diff_stunt_sig %>% filter(Test=='Wilcoxon_combat'&qval<0.05)
+without_combat <- diff_stunt_sig %>% filter(Test=='Wilcoxon'&qval<0.05)
+pdata <- pdata %>% filter(Bile_Acid %in% c(with_combat$Bile_Acid) & Bile_Acid %in% c(without_combat$Bile_Acid))
+
+#scale everything rowwise relative to the average abundance of the bile acid
+pdata2 <- pdata %>% group_by(Bile_Acid) %>% mutate(Abund_Avg=mean(Relative_Abundance, na.omit=TRUE))
+pdata2$Scaled_Abund <- pdata2$Relative_Abundance / pdata2$Abund_Avg
+##add a star in case it is also raw significant in the LMs #with covariates? Sure?
+lm_stars <- diff_stunting %>% filter(SampleType=="Feces"&pval<0.05&Test=="LM_cov") #should we specify, either stunting or HAZ as outcome? or keep both?
+pdata2$lm_sig <- ifelse(pdata2$stunted=='stunted' & #only put the star for one tile
+                          pdata2$Bile_Acid %in% lm_stars$Bile_Acid, "*", "")
+
+figure_2E <- ggplot(pdata2, aes(x=stunted, y=Bile_Acid, fill=Scaled_Abund,label=lm_sig)) + geom_tile(colour='black') +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + 
+  geom_text(colour='white', size=6) +
+  xlab(NULL) + 
+  ylab(NULL) + 
+  scale_fill_viridis() + 
+  labs(fill="Log Rel. Abund.") + ggtitle("Fecal Bile Acids Differentially Abundant by Stunting") +
+  coord_flip()
+
+pdf("../../Figure_panels/Figure2E.pdf", height = 3, width = 4.5)
+figure_2E
+dev.off()
+
+write.csv2(pdata2, "../../Source_data/Figure2E.csv")
+
+#also add a panel for primary vs. secondary bile acids as per Fig 1.
+#bile acids defined above.
+
+#one row per bile acid actually shown in the heatmap, in the same order as the heatmap y-axis
+sidebar_data <- pdata2 %>% dplyr::distinct(Bile_Acid)
+sidebar_data$Class <- bile_acid_class[as.character(sidebar_data$Bile_Acid)]
+sidebar_data$Class[is.na(sidebar_data$Class)] <- "Unclassified" #safety net if a new bile acid ever shows up
+table(sidebar_data$Class, useNA="ifany") #check nothing fell through as Unclassified
+
+p_sidebar <- ggplot(sidebar_data, aes(y=1, x=Bile_Acid, fill=Class)) + geom_tile(colour='black')
+p_sidebar <- p_sidebar + scale_fill_manual(values=c(Primary="black", Secondary="grey80", Group="white", Unclassified="red"), drop=FALSE)
+p_sidebar <- p_sidebar + theme(axis.text.x = element_blank(), axis.text.y = element_blank(),
+                                axis.ticks = element_blank(), panel.background = element_blank(),
+                                legend.key.size = unit(0.4,"cm"), legend.text=element_text(size=9),
+                                legend.title=element_text(size=10))
+p_sidebar <- p_sidebar + xlab(NULL) + ylab(NULL) + labs(fill="Bile Acid Type")
+
+p_combined <- ggarrange(p_sidebar, p, nrow=2, align="hv", heights=c(0.4, 0.45))
+
+#pdf(width=6, height=5, "/Users/khuus/ownCloud/KH-PhD/BileAcidsManuscript/Revisions_08.2026/plots/2E_Heatmap_BileAcidsbySTUNT_wsidebar_revised2.pdf")
+print(p_combined)
+#dev.off()
+
+```
+
+# Fig 3
+```{r Fig 3 repeated testing by AAT}
+##perform repeated spearman by country within sample type. (combat-adjusted data.)
+#feces
+MS.p.feces.aat = apply(df_feces,2,
+                 function(x) cor.test(c(x), bile_combat_output_F_meta$aatmggdeps, method='spearman')$p.value)
+MS.r.feces.aat = apply(df_feces,2,
+                 function(x) cor.test(c(x), bile_combat_output_F_meta$aatmggdeps, method='spearman')$estimate)
+p.res.aat.f = data.frame(Bile_Acid=names(MS.p.feces.aat),
+                         pval=MS.p.feces.aat,
+                         coef=MS.r.feces.aat,
+                         SampleType=c("Feces"),
+                         Test=c("Spearman_combat"),
+                         Outcome=c("aatmggdeps"))
+# Perform multiple comparison correction using a given method of choice
+p.res.aat.f$qval <- p.adjust(p.res.aat.f$pval, method="fdr")
+p.res.aat.f.hits <- p.res.aat.f %>% filter(qval<0.05)
+p.res.aat.f.hits[order(p.res.aat.f.hits$pval),] #OK it's ok, with the batch corrected data we still get many lithocholic acid hits
+dim(p.res.aat.f.hits)
+
+#duodenum
+MS.p.duo.aat = apply(df_duo,2,
+                 function(x) cor.test(c(x), bile_combat_output_D_meta$aatsurldmgml, method='spearman')$p.value)
+MS.r.duo.aat = apply(df_duo,2,
+                 function(x) cor.test(c(x), bile_combat_output_D_meta$aatsurldmgml, method='spearman')$estimate)
+p.res.aat.d = data.frame(Bile_Acid=names(MS.p.duo.aat),
+                         pval=MS.p.duo.aat,
+                         coef=MS.r.duo.aat,
+                         SampleType=c("Duodenal"),
+                         Test=c("Spearman_combat"),
+                         Outcome=c("aatsurldmgml"))
+# Perform multiple comparison correction using a given method of choice
+p.res.aat.d$qval <- p.adjust(p.res.aat.d$pval, method="fdr")
+p.res.aat.d.hits <- p.res.aat.d %>% filter(qval<0.05)
+p.res.aat.d.hits #no hits
+dim(p.res.aat.d.hits)
+
+#gastric
+MS.p.gas.aat = apply(df_gas,2,
+                 function(x) cor.test(c(x), bile_combat_output_G_meta$aatsurldmgml, method='spearman')$p.value)
+MS.r.gas.aat = apply(df_gas,2,
+                 function(x) cor.test(c(x), bile_combat_output_G_meta$aatsurldmgml, method='spearman')$estimate)
+p.res.aat.g = data.frame(Bile_Acid=names(MS.p.gas.aat),
+                         pval=MS.p.gas.aat,
+                         coef=MS.r.gas.aat,
+                         SampleType=c("Gastric"),
+                         Test=c("Spearman_combat"),
+                         Outcome=c("aatsurldmgml"))
+p.res.aat.g$qval <- p.adjust(p.res.aat.g$pval, method="fdr")
+p.res.aat.g.hits <- p.res.aat.g %>% filter(qval<0.05) #no hits
+p.res.aat.g.hits
+dim(p.res.aat.g.hits)
+
+#LINEAR MODELS, unadjusted data
+#Feces.
+#for example, for the first bile acid:
+summary(lm(allocholic_acid3sul_r~batch + pays + sexe + age + calprotectineggdeps + aatmggdeps, data=bile_combat_output_F_meta))$coefficients
+summary(lm(allocholic_acid3sul_r~batch + pays + sexe + age + calprotectineggdeps + aatmggdeps, data=bile_combat_output_F_meta))$coefficients[8,4] #is the p value for stunting
+
+#versus AAT
+lm.F.aat = apply(df_fecesLM,2,
+              function(x) summary(lm(c(x)~combat_input_F$batch + 
+                                       combat_input_F$pays +
+                                       combat_input_F$sexe + 
+                                       combat_input_F$age + 
+                                       combat_input_F$calprotectineggdeps +
+                                       combat_input_F$haz_cont +
+                                       combat_input_F$aatmggdeps))$coefficients[9,4])
+lm.F.aat.coef = apply(df_fecesLM,2,
+              function(x) summary(lm(c(x)~combat_input_F$batch + 
+                                       combat_input_F$pays +
+                                       combat_input_F$sexe + 
+                                       combat_input_F$age + 
+                                       combat_input_F$calprotectineggdeps +
+                                       combat_input_F$haz_cont +
+                                       combat_input_F$aatmggdeps))$coefficients[9,1])
+#add an FDR correct:
+lm.F.aat2 <- data.frame(Bile_Acid=names(lm.F.aat), 
+                       pval=lm.F.aat, 
+                       qval=p.adjust(lm.F.aat, method='fdr'),
+                       coef=lm.F.aat.coef,
+                       SampleType=c("Feces"),
+                       Test=c("LM_cov"),
+                       Outcome=c("aatmggdeps"),
+                       Covariates=c("Batch,Country,Sex,Age,Calpro,HAZ"))
+lm_F_hits <- lm.F.aat2 %>% filter(qval<0.05)
+lm_F_hits #no hits
+
+#Gastric#versus AAT
+lm.G.aat = apply(df_gasLM,2,
+              function(x) summary(lm(c(x)~combat_input_G$batch + 
+                                       combat_input_G$pays +
+                                       combat_input_G$sexe + 
+                                       combat_input_G$age + 
+                                       combat_input_G$calprotectinesurliquideduodn +
+                                       combat_input_G$haz_cont +
+                                       combat_input_G$aatsurldmgml))$coefficients[9,4])
+lm.G.aat.coef = apply(df_gasLM,2,
+              function(x) summary(lm(c(x)~combat_input_G$batch + 
+                                       combat_input_G$pays +
+                                       combat_input_G$sexe + 
+                                       combat_input_G$age + 
+                                       combat_input_G$calprotectinesurliquideduodn +
+                                       combat_input_G$haz_cont +
+                                       combat_input_G$aatsurldmgml))$coefficients[9,1])
+#add an FDR correct:
+lm.G.aat2 <- data.frame(Bile_Acid=names(lm.G.aat), 
+                       pval=lm.G.aat, 
+                       qval=p.adjust(lm.G.aat, method='fdr'),
+                       coef=lm.G.aat.coef,
+                       SampleType=c("Gastric"),
+                       Test=c("LM_cov_abs"),
+                       Outcome=c("aatsurldmgml"),
+                       Covariates=c("Batch,Country,Sex,Age,Calpro,HAZ"))
+
+#Duodenum#versus AAT
+lm.D.aat = apply(df_duoLM,2,
+              function(x) summary(lm(c(x)~combat_input_D$batch + 
+                                       combat_input_D$pays +
+                                       combat_input_D$sexe + 
+                                       combat_input_D$age + 
+                                       combat_input_D$calprotectinesurliquideduodn +
+                                       combat_input_D$haz_cont +
+                                       combat_input_D$aatsurldmgml))$coefficients[9,4])
+lm.D.aat.coef = apply(df_duoLM,2,
+              function(x) summary(lm(c(x)~combat_input_D$batch + 
+                                       combat_input_D$pays +
+                                       combat_input_D$sexe + 
+                                       combat_input_D$age + 
+                                       combat_input_D$calprotectinesurliquideduodn +
+                                       combat_input_D$haz_cont +
+                                       combat_input_D$aatsurldmgml))$coefficients[9,1])
+#add an FDR correct:
+lm.D.aat2 <- data.frame(Bile_Acid=names(lm.D.aat), 
+                       pval=lm.D.aat, 
+                       qval=p.adjust(lm.D.aat, method='fdr'),
+                       coef=lm.D.aat.coef,
+                       SampleType=c("Duodenal"),
+                       Test=c("LM_cov"),
+                       Outcome=c("aatsurldmgml"),
+                       Covariates=c("Batch,Country,Sex,Age,Calpro,HAZ"))
+
+
+#combine the data:
+diff_aat <- Reduce(full_join, list(lm.F.aat2, lm.G.aat2, lm.D.aat2,
+                                                p.res.aat.f, p.res.aat.d, p.res.aat.g))
+diff_aat
+View(diff_aat)
+
+#main hits
+diff_aat[order(diff_aat$pval),] %>% filter(qval<0.05)
+#write them out.
+#write.csv(diff_aat, "/Users/khuus/ownCloud/KH-PhD/BileAcidsManuscript/Revisions_08.2026/AAT_results_plushaz_revised.csv")
+
+diff_aat_sig <- diff_aat %>% filter(qval<0.05)
+#so there are no small intestinal hits, that's why I don't have them.
+```
+
+```{r Fig 3 repeated testing by AAT ABSOLUTE}
+##perform repeated spearman by country within sample type. (combat-adjusted data.)
+#feces
+MS.p.feces.aat = apply(df_feces_abs,2,
+                 function(x) cor.test(c(x), Fabs$aatmggdeps, method='spearman')$p.value)
+MS.r.feces.aat = apply(df_feces_abs,2,
+                 function(x) cor.test(c(x), Fabs$aatmggdeps, method='spearman')$estimate)
+p.res.aat.f = data.frame(Bile_Acid=names(MS.p.feces.aat),
+                         pval=MS.p.feces.aat,
+                         coef=MS.r.feces.aat,
+                         SampleType=c("Feces"),
+                         Test=c("Spearman_abs"),
+                         Outcome=c("aatmggdeps"))
+# Perform multiple comparison correction using a given method of choice
+p.res.aat.f$qval <- p.adjust(p.res.aat.f$pval, method="fdr")
+p.res.aat.f.hits <- p.res.aat.f %>% filter(qval<0.05)
+p.res.aat.f.hits[order(p.res.aat.f.hits$pval),] #OK it's ok, with the batch corrected data we still get many lithocholic acid hits
+dim(p.res.aat.f.hits)
+
+#duodenum
+MS.p.duo.aat = apply(df_duo_abs,2,
+                 function(x) cor.test(c(x), Dabs$aatsurldmgml, method='spearman')$p.value)
+MS.r.duo.aat = apply(df_duo_abs,2,
+                 function(x) cor.test(c(x), Dabs$aatsurldmgml, method='spearman')$estimate)
+p.res.aat.d = data.frame(Bile_Acid=names(MS.p.duo.aat),
+                         pval=MS.p.duo.aat,
+                         coef=MS.r.duo.aat,
+                         SampleType=c("Duodenal"),
+                         Test=c("Spearman_abs"),
+                         Outcome=c("aatsurldmgml"))
+# Perform multiple comparison correction using a given method of choice
+p.res.aat.d$qval <- p.adjust(p.res.aat.d$pval, method="fdr")
+p.res.aat.d.hits <- p.res.aat.d %>% filter(qval<0.05)
+p.res.aat.d.hits #no hits
+dim(p.res.aat.d.hits)
+
+#gastric
+MS.p.gas.aat = apply(df_gas_abs,2,
+                 function(x) cor.test(c(x), Gabs$aatsurldmgml, method='spearman')$p.value)
+MS.r.gas.aat = apply(df_gas_abs,2,
+                 function(x) cor.test(c(x), Gabs$aatsurldmgml, method='spearman')$estimate)
+p.res.aat.g = data.frame(Bile_Acid=names(MS.p.gas.aat),
+                         pval=MS.p.gas.aat,
+                         coef=MS.r.gas.aat,
+                         SampleType=c("Gastric"),
+                         Test=c("Spearman_abs"),
+                         Outcome=c("aatsurldmgml"))
+p.res.aat.g$qval <- p.adjust(p.res.aat.g$pval, method="fdr")
+p.res.aat.g.hits <- p.res.aat.g %>% filter(qval<0.05) #no hits
+p.res.aat.g.hits
+dim(p.res.aat.g.hits)
+
+#LINEAR MODELS, unadjusted data
+#Feces.
+#for example, for the first bile acid:
+summary(lm(allocholic_acid3sul_r~batch + pays + sexe + age + calprotectineggdeps + aatmggdeps, data=bile_combat_output_F_meta))$coefficients
+summary(lm(allocholic_acid3sul_r~batch + pays + sexe + age + calprotectineggdeps + aatmggdeps, data=bile_combat_output_F_meta))$coefficients[8,4] #is the p value for stunting
+
+#versus AAT - LM
+lm.F.aat = apply(df_feces_abs_log,2,
+              function(x) summary(lm(c(x)~Fabs$batch + 
+                                       Fabs$pays +
+                                       Fabs$sexe + 
+                                       Fabs$age + 
+                                       Fabs$calprotectineggdeps +
+                                       Fabs$haz_cont +
+                                       Fabs$aatmggdeps))$coefficients[9,4])
+lm.F.aat.coef = apply(df_feces_abs_log,2,
+              function(x) summary(lm(c(x)~Fabs$batch + 
+                                       Fabs$pays +
+                                       Fabs$sexe + 
+                                       Fabs$age + 
+                                       Fabs$calprotectineggdeps +
+                                       Fabs$haz_cont +
+                                       Fabs$aatmggdeps))$coefficients[9,1])
+#add an FDR correct:
+lm.F.aat2 <- data.frame(Bile_Acid=names(lm.F.aat), 
+                       pval=lm.F.aat, 
+                       qval=p.adjust(lm.F.aat, method='fdr'),
+                       coef=lm.F.aat.coef,
+                       SampleType=c("Feces"),
+                       Test=c("LM_cov_abs"),
+                       Outcome=c("aatmggdeps"))
+lm_F_hits <- lm.F.aat2 %>% filter(qval<0.05)
+lm_F_hits #no hits
+
+#Gastric#versus AAT
+lm.G.aat = apply(df_gas_abs_log,2,
+              function(x) summary(lm(c(x)~Gabs$batch + 
+                                       Gabs$pays +
+                                       Gabs$sexe + 
+                                       Gabs$age + 
+                                       Gabs$calprotectinesurliquideduodn +
+                                       Gabs$haz_cont +
+                                       Gabs$aatsurldmgml))$coefficients[9,4])
+lm.G.aat.coef = apply(df_gas_abs_log,2,
+              function(x) summary(lm(c(x)~Gabs$batch + 
+                                       Gabs$pays +
+                                       Gabs$sexe + 
+                                       Gabs$age + 
+                                       Gabs$calprotectinesurliquideduodn +
+                                       Gabs$haz_cont +
+                                       Gabs$aatsurldmgml))$coefficients[9,1])
+#add an FDR correct:
+lm.G.aat2 <- data.frame(Bile_Acid=names(lm.G.aat), 
+                       pval=lm.G.aat, 
+                       qval=p.adjust(lm.G.aat, method='fdr'),
+                       coef=lm.G.aat.coef,
+                       SampleType=c("Gastric"),
+                       Test=c("LM_cov_abs"),
+                       Outcome=c("aatsurldmgml"))
+
+#Duodenum#versus AAT
+lm.D.aat = apply(df_duo_abs_log,2,
+              function(x) summary(lm(c(x)~Dabs$batch + 
+                                       Dabs$pays +
+                                       Dabs$sexe + 
+                                       Dabs$age + 
+                                       Dabs$calprotectinesurliquideduodn +
+                                       Dabs$haz_cont +
+                                       Dabs$aatsurldmgml))$coefficients[9,4])
+lm.D.aat.coef = apply(df_duo_abs_log,2,
+              function(x) summary(lm(c(x)~Dabs$batch + 
+                                       Dabs$pays +
+                                       Dabs$sexe + 
+                                       Dabs$age + 
+                                       Dabs$calprotectinesurliquideduodn +
+                                       Dabs$haz_cont +
+                                       Dabs$aatsurldmgml))$coefficients[9,1])
+#add an FDR correct:
+lm.D.aat2 <- data.frame(Bile_Acid=names(lm.D.aat), 
+                       pval=lm.D.aat, 
+                       qval=p.adjust(lm.D.aat, method='fdr'),
+                       coef=lm.D.aat.coef,
+                       SampleType=c("Duodenal"),
+                       Test=c("LM_cov_abs"),
+                       Outcome=c("aatsurldmgml"))
+
+
+#combine the data:
+diff_aat_abs <- Reduce(full_join, list(lm.F.aat2, lm.G.aat2, lm.D.aat2,
+                                                p.res.aat.f, p.res.aat.d, p.res.aat.g))
+diff_aat_abs
+View(diff_aat_abs)
+
+#main hits
+diff_aat_abs[order(diff_aat_abs$pval),] %>% filter(qval<0.05)
+#write them out.
+#write.csv(diff_aat_abs, "/Users/khuus/ownCloud/KH-PhD/BileAcidsManuscript/Revisions_08.2026/AAT_results_plushaz_ABS_revised.csv")
+
+diff_aat_abs_sig <- diff_aat_abs %>% filter(qval<0.05)
+#so there are no small intestinal hits, that's why I don't have them.
+
+
+
+```
+
+```{r compare rel and abs AAT}
+#OK how about this: we simply join the tables.
+diff_aat_rel_join <- diff_aat %>% dplyr::rename(pval_rel=pval, qval_rel=qval, coef_rel=coef)
+diff_aat_abs_join <- diff_aat_abs %>% dplyr::rename(pval_abs=pval, qval_abs=qval,
+                                                  coef_abs=coef)
+#remove the 'rel abund' flag of all bile acids in the rel abund datA
+diff_aat_rel_join$Bile_Acid <- gsub("_r", "", diff_aat_rel_join$Bile_Acid)
+
+#the two chunks label the same test differently 
+diff_aat_abs_join$Test <- gsub("_ABS$", "", diff_aat_abs_join$Test, ignore.case=TRUE)
+diff_aat_rel_join$Test     <- gsub("_combat$", "", diff_aat_rel_join$Test, ignore.case=TRUE)
+
+diff_aat_compare <- full_join(diff_aat_rel_join, diff_aat_abs_join)
+View(diff_aat_compare) #there it is, finally.
+diff_aat_compare$qboth <- ifelse(diff_aat_compare$qval_rel<0.05&diff_aat_compare$qval_abs<0.05, "yes", "no")
+diff_aat_compare$pboth <- ifelse(diff_aat_compare$pval_rel<0.05&diff_aat_compare$pval_abs<0.05, "yes", "no")
+
+#write.csv(diff_aat_compare, "/Users/khuus/ownCloud/KH-PhD/BileAcidsManuscript/Revisions_08.2026/aat_results_abs_vs_rel_compare.csv")
+
+#test a few little dplyr statistics for the reviewers
+diff_aat_compare_sig <- diff_aat_compare %>% filter(qval_rel<0.05) #compare based on hits
+dim(diff_aat_compare_sig) #46 original hits
+dplyr::count(diff_aat_compare_sig, pboth) %>% mutate(per=n/sum(n)*100) #45, 80.3%
+dplyr::count(diff_aat_compare_sig, qboth) %>% mutate(per=n/sum(n)*100) #40, 71.4%
+
+```
+
+```{r Fig 3 repeated testing by AAT nonparametric nonCombat REVISED}
+##perform repeated spearman by country within sample type. (combat-adjusted data.)
+#feces
+MS.p.feces.aat = apply(df_fecesLM,2,
+                 function(x) cor.test(c(x), bile_combat_output_F_meta$aatmggdeps, method='spearman')$p.value)
+MS.r.feces.aat = apply(df_fecesLM,2,
+                 function(x) cor.test(c(x), bile_combat_output_F_meta$aatmggdeps, method='spearman')$estimate)
+p.res.aat.f.noc = data.frame(Bile_Acid=names(MS.p.feces.aat),
+                         pval=MS.p.feces.aat,
+                         coef=MS.r.feces.aat,
+                         SampleType=c("Feces"),
+                         Test=c("Spearman"),
+                         Outcome=c("aatmggdeps"))
+# Perform multiple comparison correction using a given method of choice
+p.res.aat.f.noc$qval <- p.adjust(p.res.aat.f.noc$pval, method="fdr")
+p.res.aat.f.noc.hits <- p.res.aat.f.noc %>% filter(qval<0.05)
+p.res.aat.f.noc.hits[order(p.res.aat.f.noc.hits$pval),] #OK it's ok, with the batch corrected data we still get many lithocholic acid hits
+dim(p.res.aat.f.noc.hits)
+
+#duodenum
+MS.p.duo.aat = apply(df_duoLM,2,
+                 function(x) cor.test(c(x), bile_combat_output_D_meta$aatsurldmgml, method='spearman')$p.value)
+MS.r.duo.aat = apply(df_duoLM,2,
+                 function(x) cor.test(c(x), bile_combat_output_D_meta$aatsurldmgml, method='spearman')$estimate)
+p.res.aat.d.noc = data.frame(Bile_Acid=names(MS.p.duo.aat),
+                         pval=MS.p.duo.aat,
+                         coef=MS.r.duo.aat,
+                         SampleType=c("Duodenal"),
+                         Test=c("Spearman"),
+                         Outcome=c("aatsurldmgml"))
+# Perform multiple comparison correction using a given method of choice
+p.res.aat.d.noc$qval <- p.adjust(p.res.aat.d.noc$pval, method="fdr")
+p.res.aat.d.noc.hits <- p.res.aat.d.noc %>% filter(qval<0.05)
+p.res.aat.d.noc.hits #no hits
+dim(p.res.aat.d.noc.hits)
+
+#gastric
+MS.p.gas.aat = apply(df_gasLM,2,
+                 function(x) cor.test(c(x), bile_combat_output_G_meta$aatsurldmgml, method='spearman')$p.value)
+MS.r.gas.aat = apply(df_gasLM,2,
+                 function(x) cor.test(c(x), bile_combat_output_G_meta$aatsurldmgml, method='spearman')$estimate)
+p.res.aat.g.noc = data.frame(Bile_Acid=names(MS.p.gas.aat),
+                         pval=MS.p.gas.aat,
+                         coef=MS.r.gas.aat,
+                         SampleType=c("Gastric"),
+                         Test=c("Spearman"),
+                         Outcome=c("aatsurldmgml"))
+p.res.aat.g.noc$qval <- p.adjust(p.res.aat.g.noc$pval, method="fdr")
+p.res.aat.g.noc.hits <- p.res.aat.g.noc %>% filter(qval<0.05) #no hits
+p.res.aat.g.noc.hits
+dim(p.res.aat.g.noc.hits)
+
+#combine and write out
+diff_aat2 <- Reduce(full_join, list(p.res.aat.f.noc, p.res.aat.d.noc, p.res.aat.g.noc))
+#write.csv(diff_aat2, "/Users/khuus/ownCloud/KH-PhD/BileAcidsManuscript/Revisions_08.2026/AAT_results_nonparametricNoCOMBAT_revised.csv")
+
+#add these to the prior AAT results and combine, to save time??
+diff_aat_all <- full_join(diff_aat, diff_aat2)
+#write.csv(diff_aat_all, "/Users/khuus/ownCloud/KH-PhD/BileAcidsManuscript/Revisions_08.2026/AAT_results_combinedforS14.csv")
+
+```
+## Figure 3A
+```{r}
+#primarymain_r
+diff_aat %>% filter(Bile_Acid=="primarymain_r")
+
+#pdf("plots/3A_FecesAAT_primarymain.pdf", width=3.5, height=3.5)
+fig3A <- ggplot(feces, aes(y=log(primarymain_r), x=log(aatmggdeps))) + geom_point() + geom_smooth(method='lm') + 
+  theme(panel.background = element_blank(), axis.line = element_line(colour = "black"),
+               axis.title.y = element_text(margin = margin(r = 10))) +
+      xlab("AAT") + ylab("Log Relative abundance") + ggtitle("Primary Bile Acids") +
+  annotate("text", x=1, y=-2, label=c("q=0.01\nrho=-0.10"))
+
+pdf("../../Figure_panels/Figure3A.pdf", height = 4, width = 4)
+fig3A
+dev.off()
+
+source_data_3A <- feces %>% select(primarymain_r, aatmggdeps)
+write.csv2(source_data_3A, "../../Source_data/Figure3A.csv")
+```
+## Figure 3B
+```{r}
+#	secondarymain_r
+diff_aat %>% filter(Bile_Acid=="secondarymain_r")
+
+#pdf("plots/3B_FecesAAT_secondarymain.pdf", width=3.5, height=3.5)
+fig3B <- ggplot(feces, aes(y=log(secondarymain_r), x=log(aatmggdeps))) + geom_point() + geom_smooth(method='lm') + 
+  theme(panel.background = element_blank(), axis.line = element_line(colour = "black"),
+               axis.title.y = element_text(margin = margin(r = 10))) +
+    xlab("AAT") + ylab("Log Relative abundance") + ggtitle("Secondary Bile Acids") +
+  annotate("text", x=1.25, y=-3, label=c("q=3.5e-04\nrho=-0.14"))
+pdf("../../Figure_panels/Figure3B.pdf", height = 4, width = 4)
+fig3B
+dev.off()
+
+source_data_3B <- feces %>% select(secondarymain_r, aatmggdeps)
+write.csv2(source_data_3B, "../../Source_data/Figure3B.csv")
+```
+## Figure 3C
+```{r}
+#lithoderivatives_r
+diff_aat %>% filter(Bile_Acid=="lithoderivatives_r")
+
+#pdf("plots/3C_FecesAAT_lithoderivatives.pdf", width=3.5, height=3.5)
+fig3C <- ggplot(feces, aes(y=log(lithoderivatives_r), x=log(aatmggdeps))) + geom_point() + geom_smooth(method='lm') + 
+  theme(panel.background = element_blank(), axis.line = element_line(colour = "black"),
+               axis.title.y = element_text(margin = margin(r = 10))) +
+  xlab("AAT") + ylab("Log Relative abundance") + ggtitle("Lithocholic Acid Derivatives") +
+  annotate("text", x=1.25, y=0, label=c("q=2.3e-06\nrho=-0.14"))
+pdf("../../Figure_panels/Figure3C.pdf", height = 4, width = 4)
+fig3C
+dev.off()
+
+source_data_3C <- feces %>% select(lithoderivatives_r, aatmggdeps)
+write.csv2(source_data_3C, "../../Source_data/Figure3C.csv")
+```
+## Figure 3D
+```{r Fig 3 AAT plots}
+#plot the main categories: sulfo_r, sumprimarysecondarymain_r, 
+
+#sulfo R versus AAT #best hit, not amazing if you ask me
+diff_aat %>% filter(Bile_Acid=="sulfo_r") #plot the spearman's one
+
+#pdf("plots/4D_FecesAAT_sulfo_r.pdf", width=3.5, height=3.5)
+fig3D <- ggplot(feces, aes(y=log(sulfo_r), x=log(aatmggdeps))) + geom_point() + geom_smooth(method='lm') + 
+  theme(panel.background = element_blank(), axis.line = element_line(colour = "black"),
+               axis.title.y = element_text(margin = margin(r = 10))) +
+  xlab("AAT") + ylab("Log Relative abundance") + ggtitle("Sulfated Bile Acids") +
+  annotate("text", x=1.25, y=-4, label=c("q=1.3e-08\nrho=0.22"))
+
+pdf("../../Figure_panels/Figure3D.pdf", height = 4, width = 4)
+fig3D
+dev.off()
+
+source_data_3D <- feces %>% select(sulfo_r, aatmggdeps)
+write.csv2(source_data_3D, "../../Source_data/Figure3D.csv")
+```
+
+
+```{r}
+#sumprimarysecondarymain_r
+diff_aat %>% filter(Bile_Acid=="sumprimarysecondarymain_r")
+
+#pdf("plots/#_FecesAAT_sumprimarysecondarymain.pdf", width=3.5, height=3.5)
+p <- ggplot(feces, aes(y=log(sumprimarysecondarymain_r), x=log(aatmggdeps))) + geom_point() + geom_smooth(method='lm') + 
+  theme(panel.background = element_blank(), axis.line = element_line(colour = "black"),
+               axis.title.y = element_text(margin = margin(r = 10))) +
+      xlab("AAT") + ylab("Log Relative abundance") + ggtitle("Primary & Secondary Bile Acids") +
+  annotate("text", x=1.25, y=-2, label=c("q=0.1\nrho=-0.07"))
+p
+```
+## Figure 3E
+```{r}
+#instead: plot something else for that category...
+diff_aat %>% filter(Test=="Spearman_combat" & SampleType=="Feces" & qval<0.05)
+
+#urso_r
+diff_aat %>% filter(Bile_Acid=="urso_r")
+
+#pdf("plots/3E_FecesAAT_urso_r.pdf", width=3.5, height=3.5)
+fig3E <- ggplot(feces, aes(y=log(urso_r), x=log(aatmggdeps))) + geom_point() + geom_smooth(method='lm') + 
+  theme(panel.background = element_blank(), axis.line = element_line(colour = "black"),
+               axis.title.y = element_text(margin = margin(r = 10))) + 
+  xlab("AAT") + ylab("Log Relative abundance") + ggtitle("Ursocholic Acid Derivatives") +
+  annotate("text", x=1.25, y=-2, label=c("q=7.6e-08\nrho=0.21"))
+
+pdf("../../Figure_panels/Figure3E.pdf", height = 4, width = 4)
+fig3E
+dev.off()
+
+source_data_3E <- feces %>% select(urso_r, aatmggdeps)
+write.csv2(source_data_3E, "../../Source_data/Figure3E.csv")
+```
+
+## Figure 3G
+```{r}
+#additionally as per Reviewer #3 and stunting plots: plot the ratios for absolute data.
+fig3G <- ggplot(Fabs, aes(y=log(LCA_CDCA_ratio), x=log(aatmggdeps))) + geom_point() + geom_smooth(method='lm') + 
+  theme(panel.background = element_blank(), axis.line = element_line(colour = "black"),
+               axis.title.y = element_text(margin = margin(r = 10))) +
+  xlab("AAT") + ylab("LCA:CDCA Log Ratio") + ggtitle("LCA:CDCA Conversion") +
+  annotate("text", x=1.25, y=-5, label=c("p=0.0004\nrho=-0.13"))
+
+pdf("../../Figure_panels/Figure3G.pdf", height = 4, width = 4)
+fig3G
+dev.off()
+
+source_data_3G <- Fabs %>% select(LCA_CDCA_ratio, aatmggdeps)
+write.csv2(source_data_3G, "../../Source_data/Figure3G.csv")
+
+cor.test(Fabs$LCA_CDCA_ratio, Fabs$aatmggdeps, method='spearman') #p=0.0003, rho=-0.13
+```
+## Figure 3H
+```{r}
+fig3H <- ggplot(Fabs, aes(y=log(DCA_CA_ratio), x=log(aatmggdeps))) + geom_point() + geom_smooth(method='lm') + 
+  theme(panel.background = element_blank(), axis.line = element_line(colour = "black"),
+               axis.title.y = element_text(margin = margin(r = 10))) +
+  xlab("AAT") + ylab("DCA:CA Log Ratio") + ggtitle("DCA:CA Conversion") +
+  annotate("text", x=1.25, y=-5, label=c("p=0.0004\nrho=-0.13"))
+
+pdf("../../Figure_panels/Figure3H.pdf", height = 4, width = 4)
+fig3H
+dev.off()
+
+source_data_3H <- Fabs %>% select(DCA_CA_ratio, aatmggdeps)
+write.csv2(source_data_3H, "../../Source_data/Figure3H.csv")
+
+cor.test(Fabs$DCA_CA_ratio, Fabs$aatmggdeps, method='spearman') #p=0.0004, rho=-0.13
+
+
+```
+## Figure 3F
+```{r Fig 3F AAT heatmap REVISED}
+#as per previous heatmaps, revised to use the nonparametric data first.
+##REVISED version of this heatmap: as per reviewer 3 concerned about ComBat: pick the bile acids based on non-ComBat-corrected nonparametric test results, and star based on LM
+diff_aat_sig2 <- p.res.aat.f.noc %>% filter(qval<0.05) %>% #feces hits, no combat, sig.
+  full_join(p.res.aat.f) %>% filter(qval<0.05) #but also the combat hits
+
+to_summarize <- feces %>% dplyr::select(all_of(c(diff_aat_sig2$Bile_Acid, 'aat'))) 
+
+to_summarize <- feces %>% dplyr::select(all_of(c(ba_cols, "aat")))
+to_summarize[is.na(to_summarize)] <- 0 #0 is 0, no NAs
+AverageByAAT <- to_summarize %>% dplyr::group_by(aat) %>%
+  dplyr::summarize_all(mean, na.rm=TRUE) #take 3 categories to visualize
+AverageByAAT #nice :) 
+AverageByAAT <- AverageByAAT %>% pivot_longer(cols=c(2:length(names(AverageByAAT))),
+                                                            names_to="Bile_Acid", values_to="Relative_Abundance")
+AverageByAAT #double nice :) 
+AverageByAAT <- AverageByAAT[order(AverageByAAT$Relative_Abundance),]
+
+pdata <- AverageByAAT
+mylevels <- pdata %>% filter(aat=="elevated")
+pdata$Bile_Acid <- factor(pdata$Bile_Acid, levels=mylevels$Bile_Acid)
+
+#sig hits #and no missing AAT data
+combat_hits <- p.res.aat.f %>% filter(Test=="Spearman_combat"&qval<0.05)
+noncombat_hits <- p.res.aat.f.noc %>% filter(Test=="Spearman"&qval<0.05)
+pdata <- pdata %>% filter(Bile_Acid %in% c(combat_hits$Bile_Acid) & 
+                            Bile_Acid %in% c(noncombat_hits$Bile_Acid) &
+                            aat %in% c("normal", "elevated"))
+
+#scale everything rowwise relative to the average abundance of the bile acid
+pdata2 <- pdata %>% group_by(Bile_Acid) %>% mutate(Abund_Avg=mean(Relative_Abundance, na.omit=TRUE))
+pdata2$Scaled_Abund <- pdata2$Relative_Abundance / pdata2$Abund_Avg
+#add a star in case it is also raw significant in the LMs
+lm_stars <- diff_aat %>% filter(SampleType=="Feces"&pval<0.05&Test=="LM_cov")
+pdata2$lm_sig <- ifelse(pdata2$aat=="elevated" & #only put the star for one tile
+                          pdata2$Bile_Acid %in% lm_stars$Bile_Acid, "*", "")
+
+Figure3F <- ggplot(pdata2, aes(x=aat, y=Bile_Acid, fill=Scaled_Abund,label=lm_sig)) + 
+  geom_tile(colour='black') +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + 
+  geom_text(colour='white') +
+  xlab(NULL) + 
+  ylab(NULL) + 
+  scale_fill_viridis() + 
+  labs(fill="Log Rel. Abund.") + ggtitle("Fecal Bile Acids Differentially Abundant by AAT") +
+  coord_flip()
+
+pdf("../../Figure_panels/Figure3F.pdf",width=6.5, height=3.5)
+Figure3F
+dev.off()
+
+write.csv2(pdata2, "../../Source_data/Figure3F.csv")
+
+#also add a panel for primary vs. secondary bile acids as per Fig 1.
+#bile acids defined above.
+
+#one row per bile acid actually shown in the heatmap, in the same order as the heatmap y-axis
+sidebar_data <- pdata2 %>% dplyr::distinct(Bile_Acid)
+sidebar_data$Class <- bile_acid_class[as.character(sidebar_data$Bile_Acid)]
+sidebar_data$Class[is.na(sidebar_data$Class)] <- "Unclassified" #safety net if a new bile acid ever shows up
+table(sidebar_data$Class, useNA="ifany") #check nothing fell through as Unclassified
+
+p_sidebar <- ggplot(sidebar_data, aes(y=1, x=Bile_Acid, fill=Class)) + geom_tile(colour='black')
+p_sidebar <- p_sidebar + scale_fill_manual(values=c(Primary="black", Secondary="grey80", Group="white", Unclassified="red"), drop=FALSE)
+p_sidebar <- p_sidebar + theme(axis.text.x = element_blank(), axis.text.y = element_blank(),
+                                axis.ticks = element_blank(), panel.background = element_blank(),
+                                legend.key.size = unit(0.4,"cm"), legend.text=element_text(size=9),
+                                legend.title=element_text(size=10))
+p_sidebar <- p_sidebar + xlab(NULL) + ylab(NULL) + labs(fill="Bile Acid Type")
+
+p_combined <- ggarrange(p_sidebar, p, nrow=2, align="hv", heights=c(0.45, 0.5))
+
+print(p_combined)
+```
+
+```{r repeated testing by SIOBO continuous}
+##perform repeated spearman by country within sample type. (combat-adjusted data.)
+#feces
+MS.p.feces.siobo = apply(df_feces,2,
+                 function(x) cor.test(c(x), bile_combat_output_F_meta$ufcml, method='spearman')$p.value)
+MS.r.feces.siobo = apply(df_feces,2,
+                 function(x) cor.test(c(x), bile_combat_output_F_meta$ufcml, method='spearman')$estimate)
+p.res.siobo.f = data.frame(Bile_Acid=names(MS.p.feces.siobo),
+                         pval=MS.p.feces.siobo,
+                         coef=MS.r.feces.siobo,
+                         SampleType=c("Feces"),
+                         Test=c("Spearman_combat"),
+                         Outcome=c("SIOBO(cfu/mL)"))
+# Perform multiple comparison correction using a given method of choice
+p.res.siobo.f$qval <- p.adjust(p.res.siobo.f$pval, method="fdr")
+p.res.siobo.f.hits <- p.res.siobo.f %>% filter(qval<0.05)
+p.res.siobo.f.hits[order(p.res.siobo.f.hits$pval),] #only 1: betamuricholic acid
+
+#duodenum
+MS.p.duo.siobo = apply(df_duo,2,
+                 function(x) cor.test(c(x), bile_combat_output_D_meta$ufcml, method='spearman')$p.value)
+MS.r.duo.siobo = apply(df_duo,2,
+                 function(x) cor.test(c(x), bile_combat_output_D_meta$ufcml, method='spearman')$estimate)
+p.res.siobo.d = data.frame(Bile_Acid=names(MS.p.duo.siobo),
+                         pval=MS.p.duo.siobo,
+                         coef=MS.r.duo.siobo,
+                         SampleType=c("Duodenal"),
+                         Test=c("Spearman_combat"),
+                         Outcome=c("SIOBO(cfu/mL)"))
+# Perform multiple comparison correction using a given method of choice
+p.res.siobo.d$qval <- p.adjust(p.res.siobo.d$pval, method="fdr")
+p.res.siobo.d.hits <- p.res.siobo.d %>% filter(qval<0.05)
+p.res.siobo.d.hits #no hits - aw. I think SI might be different
+
+#gastric
+MS.p.gas.siobo = apply(df_gas,2,
+                 function(x) cor.test(c(x), bile_combat_output_G_meta$ufcml, method='spearman')$p.value)
+MS.r.gas.siobo = apply(df_gas,2,
+                 function(x) cor.test(c(x), bile_combat_output_G_meta$ufcml, method='spearman')$estimate)
+p.res.siobo.g = data.frame(Bile_Acid=names(MS.p.gas.siobo),
+                         pval=MS.p.gas.siobo,
+                         coef=MS.r.gas.siobo,
+                         SampleType=c("Gastric"),
+                         Test=c("Spearman_combat"),
+                         Outcome=c("SIOBO(cfu/mL)"))
+p.res.siobo.g$qval <- p.adjust(p.res.siobo.g$pval, method="fdr")
+p.res.siobo.g.hits <- p.res.siobo.g %>% filter(qval<0.05) #no hits
+p.res.siobo.g.hits
+dim(p.res.siobo.g.hits) #no hits
+
+#LINEAR MODELS, unadjusted data
+#Feces.
+#for example, for the first bile acid:
+summary(lm(allocholic_acid3sul_r~batch + pays + sexe + age + calprotectineggdeps + ufcml, data=bile_combat_output_F_meta))$coefficients
+summary(lm(allocholic_acid3sul_r~batch + pays + sexe + age + calprotectineggdeps + ufcml, data=bile_combat_output_F_meta))$coefficients[8,4] #is the p value for stunting
+
+#versus AAT
+lm.F.siobo = apply(df_fecesLM,2,
+              function(x) summary(lm(c(x)~combat_input_F$batch + 
+                                       combat_input_F$pays +
+                                       combat_input_F$sexe + 
+                                       combat_input_F$age + 
+                                       combat_input_F$calprotectineggdeps +
+                                       combat_input_F$haz_cont +
+                                       combat_input_F$ufcml))$coefficients[9,4])
+lm.F.siobo.coef = apply(df_fecesLM,2,
+              function(x) summary(lm(c(x)~combat_input_F$batch + 
+                                       combat_input_F$pays +
+                                       combat_input_F$sexe + 
+                                       combat_input_F$age + 
+                                       combat_input_F$calprotectineggdeps +
+                                       combat_input_F$haz_cont +
+                                       combat_input_F$ufcml))$coefficients[9,1])
+#add an FDR correct:
+lm.F.siobo2 <- data.frame(Bile_Acid=names(lm.F.siobo), 
+                       pval=lm.F.siobo, 
+                       qval=p.adjust(lm.F.siobo, method='fdr'),
+                       coef=lm.F.siobo.coef,
+                       SampleType=c("Feces"),
+                       Test=c("LM_cov"),
+                       Outcome=c("SIOBO(cfu/mL)"))
+lm_F_hits <- lm.F.siobo2 %>% filter(qval<0.05)
+lm_F_hits #no hits
+
+#Gastric#versus AAT
+lm.G.siobo = apply(df_gasLM,2,
+              function(x) summary(lm(c(x)~combat_input_G$batch + 
+                                       combat_input_G$pays +
+                                       combat_input_G$sexe + 
+                                       combat_input_G$age + 
+                                       combat_input_G$calprotectinesurliquideduodn +
+                                       combat_input_G$haz_cont +
+                                       combat_input_G$ufcml))$coefficients[9,4])
+lm.G.siobo.coef = apply(df_gasLM,2,
+              function(x) summary(lm(c(x)~combat_input_G$batch + 
+                                       combat_input_G$pays +
+                                       combat_input_G$sexe + 
+                                       combat_input_G$age + 
+                                       combat_input_G$calprotectinesurliquideduodn +
+                                       combat_input_G$haz_cont +
+                                       combat_input_G$ufcml))$coefficients[9,1])
+#add an FDR correct:
+lm.G.siobo2 <- data.frame(Bile_Acid=names(lm.G.siobo), 
+                       pval=lm.G.siobo, 
+                       qval=p.adjust(lm.G.siobo, method='fdr'),
+                       coef=lm.G.siobo.coef,
+                       SampleType=c("Gastric"),
+                       Test=c("LM_cov"),
+                       Outcome=c("SIOBO(cfu/mL)"))
+
+#Duodenum#versus AAT
+lm.D.siobo = apply(df_duoLM,2,
+              function(x) summary(lm(c(x)~combat_input_D$batch + 
+                                       combat_input_D$pays +
+                                       combat_input_D$sexe + 
+                                       combat_input_D$age + 
+                                       combat_input_D$calprotectinesurliquideduodn +
+                                       combat_input_D$haz_cont +
+                                       combat_input_D$ufcml))$coefficients[9,4])
+lm.D.siobo.coef = apply(df_duoLM,2,
+              function(x) summary(lm(c(x)~combat_input_D$batch + 
+                                       combat_input_D$pays +
+                                       combat_input_D$sexe + 
+                                       combat_input_D$age + 
+                                       combat_input_D$calprotectinesurliquideduodn +
+                                       combat_input_D$haz_cont +
+                                       combat_input_D$ufcml))$coefficients[9,1])
+#add an FDR correct:
+lm.D.siobo2 <- data.frame(Bile_Acid=names(lm.D.siobo), 
+                       pval=lm.D.siobo, 
+                       qval=p.adjust(lm.D.siobo, method='fdr'),
+                       coef=lm.D.siobo.coef,
+                       SampleType=c("Duodenal"),
+                       Test=c("LM_cov"),
+                       Outcome=c("SIOBO(cfu/mL)"))
+
+
+#combine the data:
+diff_siobo_cfu <- Reduce(full_join, list(lm.F.siobo2, lm.G.siobo2, lm.D.siobo2,
+                                                p.res.siobo.f, p.res.siobo.d, p.res.siobo.g))
+diff_siobo_cfu
+View(diff_siobo_cfu)
+
+#main hits
+diff_siobo_cfu[order(diff_siobo_cfu$pval),] %>% filter(qval<0.05)
+#write them out.
+write.csv(diff_siobo_cfu, "/Users/khuus/ownCloud/KH-PhD/BileAcidsManuscript/Revisions_08.2026/SIOBO_results_cfu_cont_revised.csv")
+
+diff_siobo_cfu_sig <- diff_siobo_cfu %>% filter(qval<0.05)
+
+#plot the 3 main hits.
+
+```
+
+```{r repeated testing by SIOBO binary}
+##perform repeated spearman by country within sample type. (combat-adjusted data.)
+#these are the results in Table S14. We did not end up putting the continuous results in Table S14.
+#feces
+MS.p.feces.siobo = apply(df_feces,2,
+                 function(x) wilcox.test(c(x) ~ bile_combat_output_F_meta$sibo)$p.value)
+MS.p.feces.siobo.coef = apply(df_feces,2,
+                 function(x) wilcox.test(c(x) ~ bile_combat_output_F_meta$sibo)$statistic)
+p.res.siobo.f = data.frame(Bile_Acid=names(MS.p.feces.siobo),
+                         pval=MS.p.feces.siobo,
+                         coef=MS.p.feces.siobo.coef,
+                         SampleType=c("Feces"),
+                         Test=c("Wilcoxon_combat"),
+                         Outcome=c("SIOBO(y/n)"))
+# Perform multiple comparison correction using a given method of choice
+p.res.siobo.f$qval <- p.adjust(p.res.siobo.f$pval, method="fdr")
+p.res.siobo.f.hits <- p.res.siobo.f %>% filter(qval<0.05)
+p.res.siobo.f.hits[order(p.res.siobo.f.hits$pval),] #none
+
+#duodenum
+MS.p.duo.siobo = apply(df_duo,2,
+                 function(x) wilcox.test(c(x) ~ bile_combat_output_D_meta$sibo)$p.value)
+MS.p.duo.siobo.coef = apply(df_duo,2,
+                 function(x) wilcox.test(c(x) ~ bile_combat_output_D_meta$sibo)$statistic)
+p.res.siobo.d = data.frame(Bile_Acid=names(MS.p.duo.siobo),
+                         pval=MS.p.duo.siobo,
+                         coef=MS.p.duo.siobo.coef,
+                         SampleType=c("Duodenal"),
+                         Test=c("Wilcoxon_combat"),
+                         Outcome=c("SIOBO(y/n)"))
+# Perform multiple comparison correction using a given method of choice
+p.res.siobo.d$qval <- p.adjust(p.res.siobo.d$pval, method="fdr")
+p.res.siobo.d.hits <- p.res.siobo.d %>% filter(qval<0.05)
+p.res.siobo.d.hits #no hits - aw. I think SI might be different
+
+#gastric
+MS.p.gas.siobo = apply(df_gas,2,
+                 function(x) wilcox.test(c(x)~bile_combat_output_G_meta$sibo)$p.value)
+MS.p.gas.siobo.coef = apply(df_gas,2,
+                 function(x) wilcox.test(c(x)~bile_combat_output_G_meta$sibo)$statistic)
+p.res.siobo.g = data.frame(Bile_Acid=names(MS.p.gas.siobo),
+                         pval=MS.p.gas.siobo,
+                         coef=MS.p.gas.siobo.coef,
+                         SampleType=c("Gastric"),
+                         Test=c("Wilcoxon_combat"),
+                         Outcome=c("SIOBO(y/n)"))
+p.res.siobo.g$qval <- p.adjust(p.res.siobo.g$pval, method="fdr")
+p.res.siobo.g.hits <- p.res.siobo.g %>% filter(qval<0.05) #no hits
+p.res.siobo.g.hits
+dim(p.res.siobo.g.hits) #no hits
+
+#LINEAR MODELS, unadjusted data
+#Feces.
+#for example, for the first bile acid:
+summary(lm(allocholic_acid3sul_r~batch + pays + sexe + age + calprotectineggdeps + ufcml, data=bile_combat_output_F_meta))$coefficients
+summary(lm(allocholic_acid3sul_r~batch + pays + sexe + age + calprotectineggdeps + ufcml, data=bile_combat_output_F_meta))$coefficients[8,4] #is the p value for stunting
+
+#versus AAT
+lm.F.siobo = apply(df_fecesLM,2,
+              function(x) summary(lm(c(x)~combat_input_F$batch + 
+                                       combat_input_F$pays +
+                                       combat_input_F$sexe + 
+                                       combat_input_F$age + 
+                                       combat_input_F$calprotectineggdeps +
+                                       combat_input_F$haz_cont +
+                                       combat_input_F$sibo))$coefficients[9,4])
+lm.F.siobo.coef = apply(df_fecesLM,2,
+              function(x) summary(lm(c(x)~combat_input_F$batch + 
+                                       combat_input_F$pays +
+                                       combat_input_F$sexe + 
+                                       combat_input_F$age + 
+                                       combat_input_F$calprotectineggdeps +
+                                       combat_input_F$haz_cont +
+                                       combat_input_F$sibo))$coefficients[9,1])
+#add an FDR correct:
+lm.F.siobo2 <- data.frame(Bile_Acid=names(lm.F.siobo), 
+                       pval=lm.F.siobo, 
+                       qval=p.adjust(lm.F.siobo, method='fdr'),
+                       coef=lm.F.siobo.coef,
+                       SampleType=c("Feces"),
+                       Test=c("LM_cov"),
+                       Outcome=c("SIOBO(y/n)"),
+                       Covariates=c("Batch,Country,Sexx,Age,Calpro,HAZ"))
+lm_F_hits <- lm.F.siobo2 %>% filter(qval<0.05)
+lm_F_hits #no hits
+
+#Gastric#versus AAT
+lm.G.siobo = apply(df_gasLM,2,
+              function(x) summary(lm(c(x)~combat_input_G$batch + 
+                                       combat_input_G$pays +
+                                       combat_input_G$sexe + 
+                                       combat_input_G$age + 
+                                       combat_input_G$calprotectinesurliquideduodn +
+                                       combat_input_G$haz_cont +
+                                       combat_input_G$sibo))$coefficients[9,4])
+lm.G.siobo.coef = apply(df_gasLM,2,
+              function(x) summary(lm(c(x)~combat_input_G$batch + 
+                                       combat_input_G$pays +
+                                       combat_input_G$sexe + 
+                                       combat_input_G$age + 
+                                       combat_input_G$calprotectinesurliquideduodn +
+                                       combat_input_G$haz_cont +
+                                       combat_input_G$sibo))$coefficients[9,1])
+#add an FDR correct:
+lm.G.siobo2 <- data.frame(Bile_Acid=names(lm.G.siobo), 
+                       pval=lm.G.siobo, 
+                       qval=p.adjust(lm.G.siobo, method='fdr'),
+                       coef=lm.G.siobo.coef,
+                       SampleType=c("Gastric"),
+                       Test=c("LM_cov"),
+                       Outcome=c("SIOBO(y/n)"),
+                       Covariates=c("Batch,Country,Sexx,Age,Calpro,HAZ"))
+
+#Duodenum#versus AAT
+lm.D.siobo = apply(df_duoLM,2,
+              function(x) summary(lm(c(x)~combat_input_D$batch + 
+                                       combat_input_D$pays +
+                                       combat_input_D$sexe + 
+                                       combat_input_D$age + 
+                                       combat_input_D$calprotectinesurliquideduodn +
+                                       combat_input_D$haz_cont +
+                                       combat_input_D$sibo))$coefficients[9,4])
+lm.D.siobo.coef = apply(df_duoLM,2,
+              function(x) summary(lm(c(x)~combat_input_D$batch + 
+                                       combat_input_D$pays +
+                                       combat_input_D$sexe + 
+                                       combat_input_D$age + 
+                                       combat_input_D$calprotectinesurliquideduodn +
+                                       combat_input_D$haz_cont +
+                                       combat_input_D$sibo))$coefficients[9,1])
+#add an FDR correct:
+lm.D.siobo2 <- data.frame(Bile_Acid=names(lm.D.siobo), 
+                       pval=lm.D.siobo, 
+                       qval=p.adjust(lm.D.siobo, method='fdr'),
+                       coef=lm.D.siobo.coef,
+                       SampleType=c("Duodenal"),
+                       Test=c("LM_cov"),
+                       Outcome=c("SIOBO(y/n)"),
+                       Covariates=c("Batch,Country,Sexx,Age,Calpro,HAZ"))
+
+
+#combine the data:
+diff_siobo <- Reduce(full_join, list(lm.F.siobo2, lm.G.siobo2, lm.D.siobo2,
+                                                p.res.siobo.f, p.res.siobo.d, p.res.siobo.g))
+diff_siobo
+View(diff_siobo)
+
+#main hits
+diff_siobo[order(diff_siobo$pval),] %>% filter(qval<0.05)
+#write them out.
+#write.csv(diff_siobo, "/Users/khuus/ownCloud/KH-PhD/BileAcidsManuscript/Revisions_08.2026/SIOBO_results_binary.csv")
+
+diff_siobo_sig <- diff_siobo %>% filter(qval<0.05) #nothing
+
+#plot the 3 main hits.
+
+```
+
+```{r siobo testing nonparametric noncombat}
+#as per the other outcomes, perform this testing also using nonparametric tests on non combat data.
+#feces
+MS.p.feces.siobo = apply(df_fecesLM,2,
+                 function(x) wilcox.test(c(x) ~ bile_combat_output_F_meta$sibo)$p.value)
+MS.p.feces.siobo.coef = apply(df_fecesLM,2,
+                 function(x) wilcox.test(c(x) ~ bile_combat_output_F_meta$sibo)$statistic)
+p.res.siobo.f.noc = data.frame(Bile_Acid=names(MS.p.feces.siobo),
+                         pval=MS.p.feces.siobo,
+                         coef=MS.p.feces.siobo.coef,
+                         SampleType=c("Feces"),
+                         Test=c("Wilcoxon"),
+                         Outcome=c("SIOBO(y/n)"))
+# Perform multiple comparison correction using a given method of choice
+p.res.siobo.f.noc$qval <- p.adjust(p.res.siobo.f.noc$pval, method="fdr")
+p.res.siobo.f.noc.hits <- p.res.siobo.f.noc %>% filter(qval<0.05)
+p.res.siobo.f.noc.hits[order(p.res.siobo.f.noc.hits$pval),] #none
+
+#duodenum
+MS.p.duo.siobo = apply(df_duoLM,2,
+                 function(x) wilcox.test(c(x) ~ bile_combat_output_D_meta$sibo)$p.value)
+MS.p.duo.siobo.coef = apply(df_duoLM,2,
+                 function(x) wilcox.test(c(x) ~ bile_combat_output_D_meta$sibo)$statistic)
+p.res.siobo.d.noc = data.frame(Bile_Acid=names(MS.p.duo.siobo),
+                         pval=MS.p.duo.siobo,
+                         coef=MS.p.duo.siobo.coef,
+                         SampleType=c("Duodenal"),
+                         Test=c("Wilcoxon"),
+                         Outcome=c("SIOBO(y/n)"))
+# Perform multiple comparison correction using a given method of choice
+p.res.siobo.d.noc$qval <- p.adjust(p.res.siobo.d.noc$pval, method="fdr")
+p.res.siobo.d.noc.hits <- p.res.siobo.d.noc %>% filter(qval<0.05)
+p.res.siobo.d.noc.hits #no hits - aw. I think SI might be different
+
+#gastric
+MS.p.gas.siobo = apply(df_gasLM,2,
+                 function(x) wilcox.test(c(x)~bile_combat_output_G_meta$sibo)$p.value)
+MS.p.gas.siobo.coef = apply(df_gasLM,2,
+                 function(x) wilcox.test(c(x)~bile_combat_output_G_meta$sibo)$statistic)
+p.res.siobo.g.noc = data.frame(Bile_Acid=names(MS.p.gas.siobo),
+                         pval=MS.p.gas.siobo,
+                         coef=MS.p.gas.siobo.coef,
+                         SampleType=c("Gastric"),
+                         Test=c("Wilcoxon"),
+                         Outcome=c("SIOBO(y/n)"))
+p.res.siobo.g.noc$qval <- p.adjust(p.res.siobo.g.noc$pval, method="fdr")
+p.res.siobo.g.noc.hits <- p.res.siobo.g.noc %>% filter(qval<0.05) #no hits
+p.res.siobo.g.noc.hits
+dim(p.res.siobo.g.noc.hits) #no hits
+
+#combine the data:
+diff_siobo2 <- Reduce(full_join, list(p.res.siobo.f.noc, p.res.siobo.d.noc, p.res.siobo.g.noc))
+
+diff_siobo_all <- full_join(diff_siobo, diff_siobo2)
+
+
+#write.csv(diff_siobo_all, "/Users/khuus/ownCloud/KH-PhD/BileAcidsManuscript/Revisions_08.2026/SIOBO_results_combined_forS14.csv")
+
+
+```
+
