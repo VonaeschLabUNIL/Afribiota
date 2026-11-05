@@ -26,7 +26,10 @@ The resulting ASVs and taxonomy tables, as well as the metadata associated to th
 
   > Stool-derived in vitro community: Supplementary Data S11-S13
   
-  > Stool samples used to produce SICs: Supplementary Data S8-S9 
+  > Stool samples used to produce SICs: Supplementary Data S8-S9
+  
+  > Metabolomics metabolite data: Supplementary Data S19-S26 
+
   
 The bile acid abundance per samples is included in the metadata table in Supplementary Data S3.
 
