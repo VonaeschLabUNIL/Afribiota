@@ -1,4 +1,4 @@
-#Repository for the analysis code related to the Afribiota project.
+# Repository for the analysis code related to the Afribiota project.
 
 ## Bile_acids:
 >  1. Huus, K. E. et al. Lithocholic acid modulates the growth of butyrate-producing bacteria and is decreased in the feces of stunted children. 2026.05.04.722639 Preprint at https://doi.org/10.64898/2026.05.04.722639 (2026).
