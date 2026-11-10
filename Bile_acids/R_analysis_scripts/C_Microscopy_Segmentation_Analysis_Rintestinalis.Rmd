@@ -1,0 +1,308 @@
+
+# Supplementary Figure 5 - segmentation data analysis
+
+# +++ Setup
+
+## Libraries
+
+Load necessary libraries for data analysis and plotting.
+
+```{r, eval=FALSE}
+# Load libraries
+library(tidyverse)
+library(conflicted)
+library(gcplyr)
+library(egg)
+
+library(ggpubr)
+library(colorspace)
+
+library(readxl) 
+library(writexl)
+
+# Solve conflicts between packages with the same function names
+conflict_prefer("filter", "dplyr")
+conflict_prefer("select", "dplyr")
+conflict_prefer("combine", "dplyr")
+```
+
+## Base directories
+
+```{r}
+## ______________________________________________________
+# Set home directory
+dir_home = "~/directory"
+
+# Set data directories
+dir_input = file.path(dir_home, "Analysis/output_results")
+dir_output = file.path(dir_home, "R_output")
+
+# Create output directory if it doesn't exist
+if (!dir.exists(dir_output)) {dir.create(dir_output, recursive = TRUE)}
+```
+
+# ---------------------------------------------------------
+
+# +++ Load data
+
+## Metadata
+
+```{r}
+## ______________________________________________________
+# Load metadata
+tab_metadata = readxl::read_excel(file.path(dir_home, "metadata.xlsx"))
+```
+
+## List of files
+
+```{r}
+## ______________________________________________________
+# List raw segmentation data files
+list_of_files_phase = list.files(dir_input, pattern = "RESULTS_PHASE")
+list_of_files_dapi = list.files(dir_input, pattern = "RESULTS_DAPI")
+list_of_files_gfp = list.files(dir_input, pattern = "RESULTS_GFP")
+list_of_files_txred = list.files(dir_input, pattern = "RESULTS_TxRed")
+```
+
+## Load raw data
+
+```{r}
+# -----------------------------
+# Function: load and combine data for all files
+# -----------------------------
+
+## ******************************************************************************
+func_read_data_phase = function(file_list) {
+  # Initialize list to store data for all files
+  all_file_data_list = list()
+  
+  # Loop through files
+  for (file in file_list) {
+    
+    # get run name from file and remove "_stack.tif.csv" from the end
+    run_name = gsub("_stack.tif.csv", "", file)
+    
+    # Extract run number from file name as the last three characters of run_name
+    run_number = as.numeric(substr(run_name, nchar(run_name)-2, nchar(run_name)))
+    
+    # read csv style data
+    data = read.csv(file.path(dir_input, file))
+    
+    # rename x column as id
+    data = data %>% dplyr::rename(RUN.object = X)
+    
+    # add run number to data
+    data = data %>% 
+      dplyr::mutate(RUN = run_number) %>% 
+      dplyr::select(RUN, everything())
+    
+    # add data to list
+    all_file_data_list[[run_name]] = data
+  }
+  
+  # Combine all data into a single data frame
+  df_phase = dplyr::bind_rows(all_file_data_list)
+  
+  # Arrange data by run
+  df_phase = df_phase %>% dplyr::arrange(RUN)
+  
+  return(df_phase)
+}
+## ******************************************************************************
+```
+
+```{r}
+## ******************************************************************************
+func_read_data_gfp = function(file_list) {
+  file_list_lenght = length(list_of_files_gfp)
+  all_file_data_gfp_list = list()
+  
+  for (file in list_of_files_gfp) {
+    run_name = gsub("_stack.tif.csv", "", file)
+    run_number = as.numeric(substr(run_name, nchar(run_name)-2, nchar(run_name)))
+    data = read.csv(file.path(dir_input, file))
+    data = data %>% 
+      dplyr::rename(RUN.object = X,
+                    Area.gfp = Area,
+                    Mean.gfp = Mean)
+    data = data %>% 
+      dplyr::mutate(RUN = run_number) %>% 
+      dplyr::select(RUN, everything())
+    all_file_data_gfp_list[[run_name]] = data
+  }
+  
+  df_gfp = dplyr::bind_rows(all_file_data_gfp_list)
+  df_gfp = df_gfp %>% dplyr::arrange(RUN)
+  
+  return(df_gfp)
+}
+## ******************************************************************************
+```
+
+```{r}
+## ******************************************************************************
+func_read_data_txred = function(file_list) {
+  file_list_lenght = length(list_of_files_txred)
+  all_file_data_txred_list = list()
+  
+  for (file in list_of_files_txred) {
+    run_name = gsub("_stack.tif.csv", "", file)
+    run_number = as.numeric(substr(run_name, nchar(run_name)-2, nchar(run_name)))
+    data = read.csv(file.path(dir_input, file))
+    data = data %>% 
+      dplyr::rename(RUN.object = X,
+                    Area.txred = Area,
+                    Mean.txred = Mean)
+    data = data %>% 
+      dplyr::mutate(RUN = run_number) %>% 
+      dplyr::select(RUN, everything())
+    all_file_data_txred_list[[run_name]] = data
+  }
+  
+  df_txred = dplyr::bind_rows(all_file_data_txred_list)
+  df_txred = df_txred %>% dplyr::arrange(RUN)
+
+  return(df_txred)
+}
+## ******************************************************************************
+```
+
+```{r}
+## ______________________________________________________
+# Read and combine data for all channels
+df_phase = func_read_data_phase(list_of_files_phase)
+df_gfp = func_read_data_gfp(list_of_files_gfp)
+df_txred = func_read_data_txred(list_of_files_txred)
+
+df_combined = df_phase %>% 
+  dplyr::left_join(df_gfp, by = c("RUN", "RUN.object")) %>% 
+  dplyr::left_join(df_txred, by = c("RUN", "RUN.object")) %>% 
+  dplyr::left_join(tab_metadata, by = c("RUN" = "run"))
+```
+
+# ---------------------------------------------------------
+
+# +++ Data analysis
+
+## Base directories
+
+```{r}
+## ______________________________________________________
+# Set home directory
+dir_home = "~/directory"
+
+# Set data directories
+dir_input = file.path(dir_home, "R_output")
+dir_output = file.path(dir_home, "R_output")
+
+# Create output directory if it doesn't exist
+if (!dir.exists(dir_output)) {dir.create(dir_output, recursive = TRUE)}
+```
+
+## Data analysis
+
+```{r}
+# show distribution of all area values combined
+ggplot(df_combined, aes(x = Area)) +
+  geom_histogram(binwidth = 0.1) +
+  theme_minimal()
+```
+
+According to the histogram, we will filter out all area values below 0.5 µm^2 and exclude any images with errors in segmentation (Pixel data created big boxed instead segmented bacterial cells).
+
+```{r}
+df_filtered = df_combined %>% 
+  filter(
+    Area > 0.5,
+    ) %>% 
+  filter(is.na(exclude.segm))
+  
+```
+
+## R. intestinalis
+
+```{r}
+plot_data = df_filtered  %>% 
+  filter(DRUG.name %in% c("BA-14", "BA-6", "DMSO")) %>%
+  group_by(DRUG.name, bio.rep) %>% # Summarise area by biological replicate
+  summarise(Area = mean(Area), .groups = "drop") %>% 
+  mutate(DRUG.name = recode(DRUG.name,
+                            "BA-14" = "Taurolitocholic acid",
+                            "BA-6" = "Taurochondeoxycholic acid",
+                            "DMSO" = "DMSO"
+                            )) %>%
+  mutate(DRUG.name = factor(DRUG.name, levels = c(
+    "DMSO",
+    "Taurochondeoxycholic acid",
+    "Taurolitocholic acid"
+  )))
+
+# writexl::write_xlsx(plot_data %>% mutate(STRAIN.name = "Roseburia intestinalis"), file.path(dir_home, "SUPP_TABLE_Microscopy_Area_Rint.xlsx"))
+
+n_bacteria = df_filtered %>% 
+  filter(DRUG.name %in% c("BA-14", "BA-6", "DMSO")) %>%
+  group_by(DRUG.name) %>% # count number of bacteria per treatment
+  summarise(n = n(), .groups = "drop") %>% 
+  mutate(DRUG.name = recode(DRUG.name,
+                            "BA-14" = "Taurolitocholic acid",
+                            "BA-6" = "Taurochondeoxycholic acid",
+                            "DMSO" = "DMSO"
+                            ))
+
+ggplot(plot_data, aes(x = DRUG.name, y = Area, fill = DRUG.name)) +
+  
+  geom_boxplot(outliers = FALSE, width = 0.5, alpha = 0.6) +
+  geom_point(position = position_jitterdodge(jitter.width = 0.5), size = 1, alpha = 0.8, shape = 21) +
+  geom_text(data = n_bacteria, aes(x = DRUG.name, y = max(plot_data$Area)*1.05, label = paste0("n=", n)), 
+            position = position_dodge(width = 0.75), size = 2, angle = 45) +
+  ggpubr::stat_pwc(
+    method = "tukey_hsd",
+    label = "p.adj.format",
+    tip.length = 0,
+    label.size = 2,
+    y.position = max(plot_data$Area)*1.1,
+    ) +
+  scale_fill_manual(values = c(
+    "Taurolitocholic acid" = "gold2",
+    "Taurochondeoxycholic acid" = "#578B21",
+    "DMSO" = "white"
+  ),
+    name = "Treatment"
+  ) +
+  coord_cartesian(clip = "off") +
+  labs(
+    title = "R. intestinalis",
+    x = "", 
+    y = "Mean Area µm^2"
+    ) +
+  theme_classic(base_size = 6) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    #axis.text.y = element_text(face = "bold")
+    legend.position = "none"
+    )
+
+p1 = last_plot()
+
+## ______________________________________________________
+# Save plot
+##egg
+plot_egg = egg::set_panel_size(last_plot(), 
+                               width  = unit(40, "mm"),
+                               height = unit(40, "mm"))
+
+ggsave(filename = file.path(dir_output, "Microscopy_Area_Boxplot Rint.jpg"),
+       plot = plot_egg,
+       width = 160,
+       height = 180,
+       unit = "mm",
+       dpi = 300)
+
+ggsave(filename = file.path(dir_output, "Microscopy_Area_Boxplot Rint.pdf"),
+       plot = plot_egg,
+       width = 160,
+       height = 180,
+       unit = "mm",
+       dpi = 300)
+
+```

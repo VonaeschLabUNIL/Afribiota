@@ -1,0 +1,1361 @@
+
+# Supplementary Figure 5 - growth curve analysis
+
+# +++ Setup
+
+## Libraries
+
+Load necessary libraries for data analysis and plotting.
+
+```{r, eval=FALSE}
+# Load libraries
+library(tidyverse)
+library(conflicted)
+library(gcplyr)
+library(egg)
+
+library(ggpubr)
+library(colorspace)
+
+library(readxl) 
+library(writexl)
+
+# Solve conflicts between packages with the same function names
+conflict_prefer("filter", "dplyr")
+conflict_prefer("select", "dplyr")
+conflict_prefer("combine", "dplyr")
+```
+
+## Base directories
+
+```{r}
+## ______________________________________________________
+# Set home directory
+dir_home = "~/directory"
+
+# Set data directories
+dir_input = file.path(dir_home, "input")
+dir_output = file.path(dir_home, "output")
+
+# Set additional outputs
+dir_output_data = file.path(dir_output, "data")
+
+# Create output directory if it doesn't exist
+if (!dir.exists(dir_output)) {dir.create(dir_output)}
+if (!dir.exists(dir_output_data)) {dir.create(dir_output_data)}
+```
+
+# ---------------------------------------------------------
+
+# +++ Load data
+
+## Metadata
+
+```{r}
+## ______________________________________________________
+# Load metadata
+tab1_RunLayout = readxl::read_excel(file.path(dir_input, "Tab1_RunLayout.xlsx"))
+tab2_PlateLayout = readxl::read_excel(file.path(dir_input, "Tab2_PlateLayout.xlsx"))
+```
+
+## List of Runs
+
+```{r}
+# -----------------------------
+# Function: sort file names based on RUN number (case-insensitive)
+# -----------------------------
+
+## ******************************************************************************
+# Sort runs
+func_sort_by_run = function(file_list) {
+  # Extract the RUN number from each element of the vector
+  run_nums = gsub(".*RUN([0-9]+).*", "\\1", file_list, ignore.case = TRUE)
+  # Convert run numbers to numeric values
+  run_nums = as.numeric(run_nums)
+  # Sort vector based on numbers
+  sorted_list = file_list[order(run_nums)]
+  # Return the sorted vector
+  return(sorted_list)
+}
+## ******************************************************************************
+```
+
+```{r}
+## ______________________________________________________
+# List raw data files
+list_of_files = list.files(dir_input, pattern = "RUN")
+
+# Sort list of files
+list_of_files = func_sort_by_run(file_list = list_of_files)
+```
+
+## Load raw data
+
+```{r}
+# -----------------------------
+# Function: load and combine raw data for all runs based on metadata
+# -----------------------------
+
+## ******************************************************************************
+func_read_data = function(file_list, run_layout, plate_layout, start_row) {
+  
+  # Extract all run number from the file list
+  all_file_run_numbers = as.numeric(gsub(".*RUN([0-9]+).*", "\\1", file_list, ignore.case = TRUE))
+  all_metadata_run_numbers = run_layout$RUN
+  
+  # Create error message if there are run numbers in the file list that are not in the metadata
+  if (!all(all_file_run_numbers %in% all_metadata_run_numbers)) {
+    stop("***Mighty error: There are run numbers in the file list that are not in the metadata.***")
+  }
+  
+  # Map run numbers to file names to easily access the correct file for each run number
+  run_file_map = setNames(file_list, all_file_run_numbers)
+  
+  # initialize list to store data for all runs
+  all_runs_data_list = list()
+  
+  ## ______________________________________________________
+  # Loop through files
+  for (run_num in all_file_run_numbers) {
+    
+    # Create error message if there are run numbers in the metadata that are not in the file list
+    if (is.na(run_file_map[as.character(run_num)])) {
+      stop(paste("No file found for RUN", run_num))
+    }
+    
+    # Extract number of plates for this run from metadata
+    all_num_plates = run_layout %>% dplyr::filter(RUN == run_num) %>% dplyr::pull(RUN.plate)
+    
+    # initialize list to store data for this run
+    run_data_list = list()
+    
+    ## ______________________________________________________
+    # Loop through plates
+    for (plate_num in all_num_plates) {
+      
+      # print message to track progress
+      message(paste0("Reading data for RUN ", run_num, " - PLATE ", plate_num))
+      
+      # extract time metadata for this plate from metadata
+      TIME.duration = run_layout %>% dplyr::filter(RUN == run_num, RUN.plate == plate_num) %>% dplyr::pull(TIME.duration)
+      TIME.interval = run_layout %>% dplyr::filter(RUN == run_num, RUN.plate == plate_num) %>% dplyr::pull(TIME.interval)
+      
+      # define end row based on time metadata
+      end_row = start_row + TIME.duration
+      
+      # Read data for this plate
+      data = readxl::read_excel(file.path(dir_input, run_file_map[as.character(run_num)]), 
+        sheet = plate_num,
+        skip = start_row -1,
+        n_max = end_row - start_row + 1,
+        col_names = TRUE
+      )
+      
+      # Adjust data
+      data = data %>% 
+        dplyr::select(-"T° 578") %>% 
+        dplyr::mutate(Time = 0:TIME.duration*TIME.interval) %>% 
+        tidyr::pivot_longer(cols = -Time, names_to = "WELL", values_to = "OD") %>%
+        dplyr::mutate(OD = as.numeric(OD),
+                      rrpp = run_num*100 + plate_num) %>% 
+        dplyr::rename(TIME = Time)
+      
+      # Add metadata to data
+      metadata_RunLayout = run_layout %>% 
+        filter(RUN == run_num, RUN.plate == plate_num) %>% 
+        select(-TIME.duration, -TIME.interval)
+      
+      data = data %>% 
+        dplyr::bind_cols(metadata_RunLayout[rep(1, nrow(data)), ])
+      
+      # Store data for this plate in the list for this run
+      run_data_list[[plate_num]] = data
+    }
+  
+    # Combine data for all plates in this run into a single data frame
+    run_data = dplyr::bind_rows(run_data_list)
+  
+    # Store data for this run in the list for all runs
+    all_runs_data_list[[run_num]] = run_data
+  }
+  
+  # Combine data for all runs into a single data frame
+  all_runs_data = dplyr::bind_rows(all_runs_data_list)
+
+  # Add metadata from plate layout to the combined data for all runs
+  all_runs_data = all_runs_data %>% 
+    dplyr::left_join(plate_layout, by = c("PLATE.design", "WELL"))
+  
+  # Factor wells to be in correct order
+  all_runs_data = all_runs_data %>% 
+    dplyr::mutate(WELL = factor(WELL, levels = paste0(rep(LETTERS[1:8], each = 12), 1:12, sep = "")))
+  
+  # Return combined data for all runs
+  return(all_runs_data)
+}
+## ******************************************************************************
+```
+
+```{r}
+## ______________________________________________________
+# Load data for all runs
+df_master = func_read_data(file_list = list_of_files, 
+                           run_layout = tab1_RunLayout,
+                           plate_layout = tab2_PlateLayout,
+                           start_row = 40
+                           )
+```
+
+# ---------------------------------------------------------
+
+# +++ Baseline correction - LM
+
+To account for compound-specific optical background effects, baseline correction is performed per well. For each curve a log-linear model is fitted to the early time points and extrapolated to t = 0 to estimate the initial optical density. This estimated baseline is then subtracted from all time points of the corresponding well, allowing correction for well-specific baseline shifts without assuming exponential growth.
+
+## Estimate baseline per well
+
+### Medium control slope Correction
+
+To control for systematic medium-driven temporal effects, such as optical relaxation, temperature equilibration, or compound absorbance decay, the slope of all medium control curves per-plate is calculated and subtracted from all curves on a per-well basis.
+
+```{r}
+## ______________________________________________________
+# Calculate medium control median
+baseline_medium = df_master %>%
+  dplyr::filter(CONDITION == "Control_Medium") %>% 
+  dplyr::select(rrpp, WELL, TIME, OD)
+
+## ______________________________________________________
+# Calculate slope of medium control curves per plate
+baseline_medium_fit = baseline_medium %>% 
+  dplyr::group_by(rrpp) %>%
+  dplyr::summarise(
+    blank_intercept = coef(lm(OD ~ TIME))[1],
+    blank_slope = coef(lm(OD ~ TIME))[2],
+    .groups = "drop"
+  )
+
+## ____________________________________________________
+# Subtract medium control from all data points to account for medium-specific background effects
+df_corr = df_master %>% 
+  dplyr::left_join(baseline_medium_fit, by = c("rrpp")) %>% 
+  dplyr::mutate(
+    OD.corr.med = OD - blank_slope * TIME
+  ) %>%
+  dplyr::select(-blank_intercept, -blank_slope)
+
+```
+
+### Calculate and subtract baseline
+
+After adjusting for medium-specific temporal effects, the baseline is estimated for each curve by fitting a log-linear model to the early time points and extrapolating to t = 0. This estimated baseline is then subtracted from all time points of the corresponding curve to get the t0-corrected curves.
+
+```{r}
+## ______________________________________________________
+# Alternative baseline estimation using log-transformed linear fit to early time points
+baseline_estimates = df_corr %>%
+  dplyr::group_by(rrpp, WELL) %>%
+  # Use early time window
+  dplyr::filter(TIME <= 4) %>% 
+  dplyr::summarise(
+    intercept = stats::coef(lm(log(OD.corr.med) ~ TIME))[1],
+    ODt0      = exp(intercept),
+    .groups = "drop"
+  ) %>% 
+  dplyr::select(rrpp, WELL, ODt0)
+
+## ______________________________________________________
+# Add baseline estimates to growth curve data and perform baseline correction
+df_corr = df_corr %>%
+  dplyr::left_join(baseline_estimates, by = c("rrpp", "WELL")) %>%
+  dplyr::mutate(OD.corr.t0 = OD.corr.med - ODt0)
+```
+
+### Set floor for negative values
+
+To avoid issues with negative values after baseline correction, which can cause problems for log-transformation and derivative calculations, we can set a floor value for all t0-corrected OD values. This ensures that all values are positive and allows for downstream analyses without errors. Negative OD values close to 0 are not biologically meaningful and represent baseline correction noise.
+
+```{r}
+## ______________________________________________________
+# Set floor for negative values after baseline correction
+df_corr = df_corr %>% 
+  dplyr::mutate(OD.corr.t0 = ifelse(OD.corr.t0 < 0.001, 0.001, OD.corr.t0))
+```
+
+# ---------------------------------------------------------
+
+# +++ Curve noise reduction
+
+## calculate smoothed curves
+
+```{r}
+## ______________________________________________________
+# Apply two-step smoothing for noise reduction
+df_smooth = df_corr %>% 
+  dplyr::group_by(rrpp, WELL) %>%
+  mutate(
+    OD.smoothed_medi = gcplyr::smooth_data(x = TIME, y = OD.corr.t0, sm_method = "moving-median", window_width_n = 3),
+    OD.smoothed_medi = ifelse(is.na(OD.smoothed_medi), OD.corr.t0, OD.smoothed_medi),
+    OD.smoothed_mean = gcplyr::smooth_data(x = TIME, y = OD.smoothed_medi, sm_method = "moving-average", window_width_n = 3),
+    OD.smoothed_mean = ifelse(is.na(OD.smoothed_mean), OD.smoothed_medi, OD.smoothed_mean)
+    ) %>% 
+  dplyr::ungroup()
+```
+
+# ---------------------------------------------------------
+
+# +++ Calculate growth metrics
+
+## Calculate derivatives
+
+Lag time calculation require the calculation of derivatives.
+
+```{r}
+## _____________________________________________________
+# calculate simdple and per-capita derivative for smoothed curves
+df_deriv = df_smooth %>% 
+  dplyr::group_by(rrpp, WELL) %>%
+  mutate(deriv.simple = gcplyr::calc_deriv(x = TIME, y = OD.smoothed_mean, window_width_n = 3)) %>% 
+  dplyr::ungroup()
+```
+
+## Metrics
+
+Note: NAs will mostly always be calculated, as the calculations are done per well and controls are filtered out in later steps.
+
+```{r}
+## ______________________________________________________
+# Calculate growth metrics
+df_metrics = df_deriv %>%
+  dplyr::group_by(rrpp, WELL, CONDITION, SPECIES.name, DRUG.name, CONCENTRATION, REPLICATE) %>%
+  dplyr::summarise(
+    
+    # timepoint of max growth rate:
+    time.infliction = gcplyr::extr_val(TIME, which_max_gc(deriv.simple)),
+    
+    # lag time:
+    time.lag = gcplyr::lag_time(x = TIME, y = OD.corr.t0, deriv = deriv.simple, trans_y = "linear"),
+    
+    # time of end of exponential phase:
+    time.end.expo = time.infliction + (time.infliction-time.lag),
+    
+    # growth curve area under the curve:
+    AUC = gcplyr::auc(x = TIME, y = OD.smoothed_medi),
+    
+    .groups = "drop"
+  )
+```
+
+### Calculate gc-end-exponential AUCs
+
+To analyse the AUC of treated wells against the AUC of growth controls, but at the end of the exponential phase of the growth controls, we need to calculate the time of the end of the exponential phase for each growth control curve. This can be done by calculating the lag time and infliction point for each growth control curve and then using these to calculate the end of the exponential phase. Once we have the time of the end of the exponential phase for each growth control curve, we can calculate the AUC up to that time point for all curves.
+
+```{r}
+## ______________________________________________________
+# Calculate metrics of growth controls per species
+df_metrics_controls_temp = df_deriv %>%
+  dplyr::group_by(rrpp, WELL, CONDITION, SPECIES.name) %>%
+  dplyr::filter(CONDITION == "Control_Growth") %>% 
+  dplyr::summarise(
+    time.infliction.gc = gcplyr::extr_val(TIME, which_max_gc(deriv.simple)),
+    time.lag.gc = gcplyr::lag_time(x = TIME, y = OD.corr.t0, deriv = deriv.simple, trans_y = "linear"),
+    time.end.expo.gc = time.lag.gc + (time.infliction.gc - time.lag.gc),
+    .groups = "drop"
+  ) %>% 
+  dplyr::group_by(rrpp, CONDITION, SPECIES.name) %>%
+  dplyr::summarise(
+    time.end.expo.gc.median = median(time.end.expo.gc, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+## ______________________________________________________
+# Join control metrics with main metrics data frame
+df_metrics_controls = df_deriv %>%
+  dplyr::left_join(df_metrics_controls_temp, by = c("rrpp", "SPECIES.name")) %>% 
+  dplyr::group_by(rrpp, WELL) %>%
+  dplyr::summarise(
+     AUC.expo.end.gc = {
+      # Get unique time.end.expo.gc.median value for the current group because its not collapsed yet
+      t_end = unique(time.end.expo.gc.median)
+      # Check if t_end is a single value, not NA, and greater than 0 before calculating AUC
+      if (length(t_end) == 1 &&
+          !is.na(t_end) &&
+          t_end > 0) {
+        # Calculate AUC up to the end of exponential phase of the growth control for the corresponding species and plate
+        gcplyr::auc(x = TIME,y = OD.smoothed_medi,xlim = c(0, t_end))
+        } else {NA}
+    },
+    .groups = "drop"
+  )
+
+## ______________________________________________________
+# Join gc-end-expo AUCs with main metrics data frame
+df_metrics = df_metrics %>% 
+  dplyr::left_join(df_metrics_controls, by = c("rrpp", "WELL"))
+```
+
+# ---------------------------------------------------------
+
+# +++ Filter Data
+
+Filter out wells with abnormal growth due to technical issues or contamination.
+
+Removed data:
+ 
+-  Replicate 2 of C. comes due to errors in media production. Errors in media creation (missing components) lead to severly increased lagtime of C. comes in replicate 2. This can result in skewed data that does not accurately reflect the true growth characteristics of the species under study. By removing this replicate, we ensure that our analysis is based on reliable controls and representative data.
+
+## Filter data
+
+```{r}
+## ______________________________________________________
+# Add well run-run-plate-plate-well-well identifyer
+df_processed = df_metrics %>% 
+  dplyr::group_by(rrpp) %>% 
+  dplyr::mutate(rrppww = rrpp * 100 + row_number()) %>% 
+  dplyr::ungroup()
+
+
+## ______________________________________________________
+# Filter data 
+df_processed = df_processed %>% 
+  dplyr::filter(CONDITION != "Control_Medium",  # Remove medium controls for clarity in downstream analysis and visualization
+                !(rrpp == 202 & SPECIES.name == "C.comes") # C.comes replicate 2 removed due to errors in media production
+                )
+```
+
+# ---------------------------------------------------------
+
+# +++ Manuscript plots
+
+```{r}
+# load data
+load(file.path(dir_output, "df_corr.RData"))
+load(file.path(dir_output, "df_processed.RData"))
+```
+
+
+```{r}
+width = 35
+heigth = 25
+heigth_gc = 28.3
+
+width_block = 52.5
+heigth_block = 53
+
+"#006290"
+"#25C771" 
+"#FDE333"
+```
+
+## growth curves
+
+### Panel A - Chenodeoxycholic acid
+
+```{r}
+## _____________________________________________________
+# Growth curve C. comes
+
+# prepare data
+plot_data = df_corr %>% 
+  filter(SPECIES.name == "C.comes",
+         DRUG.name %in% c("DMSO", "BA-4"),
+         REPLICATE %in% c(1, 3)) %>% 
+  mutate(DRUG.name = recode(DRUG.name,
+                         "BA-4" = "Chenodeoxycholic acid",
+                         "DMSO" = "DMSO"
+                         )) %>% 
+  mutate(DRUG.name = factor(DRUG.name, levels = c("DMSO","Chenodeoxycholic acid")))
+
+# Save data:
+data_A_comes = plot_data %>% 
+                      select(SPECIES.name, DRUG.name, REPLICATE, TIME, OD.corr.t0) %>% 
+                      group_by(SPECIES.name, DRUG.name, REPLICATE, TIME) %>% 
+                      summarise(OD.corr.t0 = mean(OD.corr.t0), .groups = "drop")
+# writexl::write_xlsx(data_A_comes, file.path(dir_output, "Manuscript_figures_data", "A_growth_curves_Ccomes_chenodeoxycholic_acid.xlsx"))
+
+# plot
+ggplot(data = plot_data, aes(x = TIME, y = OD.corr.t0, color = DRUG.name, fill = DRUG.name, shape = DRUG.name)) +
+  stat_summary(fun = mean, geom = "line", linewidth = 0.25, show.legend = FALSE) +
+  stat_summary(fun = mean, geom = "point", size = 1, color = "black") +
+  geom_errorbar(stat = "summary", fun.data = mean_sd, linewidth = 0.25, width = 0.22, show.legend = FALSE) +
+  scale_color_manual(values = c("DMSO" = "grey25", "Chenodeoxycholic acid" = "#006290")) +
+  scale_fill_manual(values = c("DMSO" = "grey25", "Chenodeoxycholic acid" = "#006290")) +
+  scale_shape_manual(values = c("DMSO" = 5, "Chenodeoxycholic acid" = 21)) +
+  scale_y_continuous(limits = c(0, 1.1), expand = expansion(mult = c(0.05, 0.1))) +
+  coord_cartesian(clip = "off") +
+  # geom_vline(xintercept = 7, linetype = "dashed", color = "black", linewidth = 0.2) +
+  geom_vline(xintercept = 9, linetype = "dashed", color = "black", linewidth = 0.2) +
+  # annotate("text", x = 7.5, y = 1, label = "t-microscopy", size = 4/.pt, hjust = 1.15, vjust = 0, color = "grey10") +
+  annotate("text", x = 9.5, y = 0, label = "AUC.expo.end.gc", size = 4/.pt, hjust = 0, vjust = 0, color = "grey10") +
+  theme_classic(base_size = 6) +
+  labs(
+    title = "C. comes (n = 2)",
+    y = "OD578 (t0-corrected)",
+    x = "Time (h)",
+    ) +
+  theme(
+    plot.title.position = "plot",
+    legend.title = element_blank(),
+    legend.position = "bottom",
+    legend.margin = margin(grid::unit(0, "cm")),
+    legend.key.height = grid::unit(0.3, "cm"),
+    legend.key.width = grid::unit(0.3, "cm"),
+    )
+
+# egg
+plot_egg = egg::set_panel_size(last_plot(), 
+                               width  = unit(width, "mm"),
+                               height = unit(heigth_gc, "mm"))
+
+# Save
+ggsave(filename = file.path(dir_output, "Manuscript_figures", "A_growth_curves_Ccomes_chenodeoxycholic_acid.pdf"),
+       plot = plot_egg,
+       device = cairo_pdf(),
+       width = width_block,
+       height = heigth_block,
+       unit = "mm",
+       dpi = 300)
+```
+
+```{r}
+## _____________________________________________________
+# Growth curve R. intestinalis
+
+# prepare data
+plot_data = df_corr %>% 
+  filter(SPECIES.name == "R.intestinalis",
+         DRUG.name %in% c("DMSO", "BA-4"),
+         REPLICATE %in% c(1, 2, 3)) %>% 
+  mutate(DRUG.name = recode(DRUG.name,
+                         "BA-4" = "Chenodeoxycholic acid",
+                         "DMSO" = "DMSO"
+                         )) %>% 
+  mutate(DRUG.name = factor(DRUG.name, levels = c("DMSO","Chenodeoxycholic acid")))
+
+# Save data:
+data_A_rint = plot_data %>% 
+                      select(SPECIES.name, DRUG.name, REPLICATE, TIME, OD.corr.t0) %>% 
+                      group_by(SPECIES.name, DRUG.name, REPLICATE, TIME) %>% 
+                      summarise(OD.corr.t0 = mean(OD.corr.t0), .groups = "drop")
+# writexl::write_xlsx(data_A_rint, file.path(dir_output, "Manuscript_figures_data", "A_growth_curves_Rintestinalis_chenodeoxycholic_acid.xlsx"))
+
+# plot
+ggplot(data = plot_data, aes(x = TIME, y = OD.corr.t0, color = DRUG.name, fill = DRUG.name, shape = DRUG.name)) +
+  stat_summary(fun = mean, geom = "line", linewidth = 0.25, show.legend = FALSE) +
+  stat_summary(fun = mean, geom = "point", size = 1, color = "black") +
+  geom_errorbar(stat = "summary", fun.data = mean_sd, linewidth = 0.25, width = 0.22, show.legend = FALSE) +
+  scale_color_manual(values = c("DMSO" = "grey25", "Chenodeoxycholic acid" = "#006290")) +
+  scale_fill_manual(values = c("DMSO" = "grey25", "Chenodeoxycholic acid" = "#006290")) +
+  scale_shape_manual(values = c("DMSO" = 5, "Chenodeoxycholic acid" = 21)) +
+  scale_y_continuous(limits = c(0, 0.75), expand = expansion(mult = c(0.05, 0.1))) +
+  coord_cartesian(clip = "off") +
+  #geom_vline(xintercept = 9, linetype = "dashed", color = "black", linewidth = 0.2) +
+  geom_vline(xintercept = 12, linetype = "dashed", color = "black", linewidth = 0.2) +
+  #nnotate("text", x = 9.5, y = 1, label = "t-microscopy", size = 4/.pt, hjust = 1.15, vjust = 0, color = "grey10") +
+  annotate("text", x = 12.5, y = 0, label = "AUC.expo.end.gc", size = 4/.pt, hjust = 0, vjust = 0, color = "grey10") +
+  theme_classic(base_size = 6) +
+  labs(
+    title = "R. intestinalis (n = 3)",
+    y = "OD578 (t0-corrected)",
+    x = "Time (h)",
+    ) +
+  theme(
+    plot.title.position = "plot",
+    legend.title = element_blank(),
+    legend.position = "bottom",
+    legend.margin = margin(grid::unit(0, "cm")),
+    legend.key.height = grid::unit(0.3, "cm"),
+    legend.key.width = grid::unit(0.3, "cm"),
+    )
+
+# egg
+plot_egg = egg::set_panel_size(last_plot(), 
+                               width  = unit(width, "mm"),
+                               height = unit(heigth_gc, "mm"))
+
+# Save
+ggsave(filename = file.path(dir_output, "Manuscript_figures", "A_growth_curves_Rint_chenodeoxycholic_acid.pdf"),
+       plot = plot_egg,
+       device = cairo_pdf(),
+       width = width_block,
+       height = heigth_block,
+       unit = "mm",
+       dpi = 300)
+```
+
+### Panel B - Taurochondeoxycholic acid
+
+```{r}
+## _____________________________________________________
+# Growth curve C. comes
+
+# prepare data
+plot_data = df_corr %>% 
+  filter(SPECIES.name == "C.comes",
+         DRUG.name %in% c("DMSO", "BA-6"),
+         REPLICATE %in% c(1, 3)) %>%
+  mutate(DRUG.name = recode(DRUG.name,
+                         "BA-6" = "Taurochondeoxycholic acid",
+                         "DMSO" = "DMSO"
+                         )) %>%
+  mutate(DRUG.name = factor(DRUG.name, levels = c("DMSO","Taurochondeoxycholic acid")))
+
+# Save data:
+data_B_comes = plot_data %>% 
+                      select(SPECIES.name, DRUG.name, REPLICATE, TIME, OD.corr.t0) %>% 
+                      group_by(SPECIES.name, DRUG.name, REPLICATE, TIME) %>% 
+                      summarise(OD.corr.t0 = mean(OD.corr.t0), .groups = "drop")
+# writexl::write_xlsx(data_B_comes, file.path(dir_output, "Manuscript_figures_data", "B_growth_curves_Ccomes_Taurochondeoxycholic_acid.xlsx"))
+
+# plot
+ggplot(data = plot_data, aes(x = TIME, y = OD.corr.t0, color = DRUG.name, fill = DRUG.name, shape = DRUG.name)) +
+  stat_summary(fun = mean, geom = "line", linewidth = 0.25, show.legend = FALSE) +
+  stat_summary(fun = mean, geom = "point", size = 1, color = "black") +
+  geom_errorbar(stat = "summary", fun.data = mean_sd, linewidth = 0.25, width = 0.22, show.legend = FALSE) +
+  scale_color_manual(values = c("DMSO" = "grey25", "Taurochondeoxycholic acid" = "#578B21")) +
+  scale_fill_manual(values = c("DMSO" = "grey25", "Taurochondeoxycholic acid" = "#578B21")) +
+  scale_shape_manual(values = c("DMSO" = 5, "Taurochondeoxycholic acid" = 21)) +
+  scale_y_continuous(limits = c(0, 1.1), expand = expansion(mult = c(0.05, 0.1))) +
+  coord_cartesian(clip = "off") +
+  geom_vline(xintercept = 7, linetype = "dashed", color = "black", linewidth = 0.2) +
+  geom_vline(xintercept = 9, linetype = "dashed", color = "black", linewidth = 0.2) +
+  annotate("text", x = 7.5, y = 1, label = "t-microscopy", size = 4/.pt, hjust = 1.15, vjust = 0, color = "grey10") +
+  annotate("text", x = 9.5, y = 0, label = "AUC.expo.end.gc", size = 4/.pt, hjust = 0, vjust = 0, color = "grey10") +
+  theme_classic(base_size = 6) +
+  labs(
+    title = "C. comes (n = 2)",
+    y = "OD578 (t0-corrected)",
+    x = "Time (h)",
+    ) +
+  theme(
+    plot.title.position = "plot",
+    legend.title = element_blank(),
+    legend.position = "bottom",
+    legend.margin = margin(grid::unit(0, "cm")),
+    legend.key.height = grid::unit(0.3, "cm"),
+    legend.key.width = grid::unit(0.3, "cm"),
+    )
+
+# egg
+plot_egg = egg::set_panel_size(last_plot(), 
+                               width  = unit(width, "mm"),
+                               height = unit(heigth_gc, "mm"))
+
+# Save
+ggsave(filename = file.path(dir_output, "Manuscript_figures", "B_growth_curves_Ccomes_Taurochondeoxycholic_acid.pdf"),
+       plot = plot_egg,
+       device = cairo_pdf(),
+       width = width_block,
+       height = heigth_block,
+       unit = "mm",
+       dpi = 300)
+```
+
+```{r}
+## _____________________________________________________
+# Growth curve R. intestinalis
+
+# prepare data
+plot_data = df_corr %>% 
+  filter(SPECIES.name == "R.intestinalis",
+         DRUG.name %in% c("DMSO", "BA-6"),
+         REPLICATE %in% c(1, 2,3)) %>%
+  mutate(DRUG.name = recode(DRUG.name,
+                         "BA-6" = "Taurochondeoxycholic acid",
+                         "DMSO" = "DMSO"
+                         )) %>%
+  mutate(DRUG.name = factor(DRUG.name, levels = c("DMSO","Taurochondeoxycholic acid")))
+
+# Save data:
+data_B_rint = plot_data %>% 
+                      select(SPECIES.name, DRUG.name, REPLICATE, TIME, OD.corr.t0) %>% 
+                      group_by(SPECIES.name, DRUG.name, REPLICATE, TIME) %>% 
+                      summarise(OD.corr.t0 = mean(OD.corr.t0), .groups = "drop")
+# writexl::write_xlsx(data_B_rint, file.path(dir_output, "Manuscript_figures_data", "B_growth_curves_Rintestinalis_Taurochondeoxycholic_acid.xlsx"))
+
+# plot
+ggplot(data = plot_data, aes(x = TIME, y = OD.corr.t0, color = DRUG.name, fill = DRUG.name, shape = DRUG.name)) +
+  stat_summary(fun = mean, geom = "line", linewidth = 0.25, show.legend = FALSE) +
+  stat_summary(fun = mean, geom = "point", size = 1, color = "black") +
+  geom_errorbar(stat = "summary", fun.data = mean_sd, linewidth = 0.25, width = 0.22, show.legend = FALSE) +
+  scale_color_manual(values = c("DMSO" = "grey25", "Taurochondeoxycholic acid" = "#578B21")) +
+  scale_fill_manual(values = c("DMSO" = "grey25", "Taurochondeoxycholic acid" = "#578B21")) +
+  scale_shape_manual(values = c("DMSO" = 5, "Taurochondeoxycholic acid" = 21)) +
+  scale_y_continuous(limits = c(0, 0.75), expand = expansion(mult = c(0.05, 0.1))) +
+  coord_cartesian(clip = "off") +
+  geom_vline(xintercept = 9, linetype = "dashed", color = "black", linewidth = 0.2) +
+  geom_vline(xintercept = 12, linetype = "dashed", color = "black", linewidth = 0.2) +
+  annotate("text", x = 9.5, y = 0.7, label = "t-microscopy", size = 4/.pt, hjust = 1.15, vjust = 0, color = "grey10") +
+  annotate("text", x = 12.5, y = 0, label = "AUC.expo.end.gc", size = 4/.pt, hjust = 0, vjust = 0, color = "grey10") +
+  theme_classic(base_size = 6) +
+  labs(
+    title = "R. intestinalis (n = 3)",
+    y = "OD578 (t0-corrected)",
+    x = "Time (h)",
+    ) +
+  theme(
+    plot.title.position = "plot",
+    legend.title = element_blank(),
+    legend.position = "bottom",
+    legend.margin = margin(grid::unit(0, "cm")),
+    legend.key.height = grid::unit(0.3, "cm"),
+    legend.key.width = grid::unit(0.3, "cm"),
+    )
+
+# egg
+plot_egg = egg::set_panel_size(last_plot(), 
+                               width  = unit(width, "mm"),
+                               height = unit(heigth_gc, "mm"))
+
+# Save
+ggsave(filename = file.path(dir_output, "Manuscript_figures", "B_growth_curves_Rint_Taurochondeoxycholic_acid.pdf"),
+       plot = plot_egg,
+       device = cairo_pdf(),
+       width = width_block,
+       height = heigth_block,
+       unit = "mm",
+       dpi = 300)
+```
+
+### Panel C - Taurolitocholic acid
+
+```{r}
+## _____________________________________________________
+# Growth curve C. comes
+
+# prepare data
+plot_data = df_corr %>% 
+  filter(SPECIES.name == "C.comes",
+         DRUG.name %in% c("DMSO", "BA-14"),
+         REPLICATE %in% c(1, 3)) %>%
+  mutate(DRUG.name = recode(DRUG.name,
+                         "BA-14" = "Taurolitocholic acid",
+                         "DMSO" = "DMSO"
+                         )) %>%
+  mutate(DRUG.name = factor(DRUG.name, levels = c("DMSO","Taurolitocholic acid")))
+
+# Save data:
+data_C_comes = plot_data %>% 
+                      select(SPECIES.name, DRUG.name, REPLICATE, TIME, OD.corr.t0) %>% 
+                      group_by(SPECIES.name, DRUG.name, REPLICATE, TIME) %>% 
+                      summarise(OD.corr.t0 = mean(OD.corr.t0), .groups = "drop")
+# writexl::write_xlsx(data_C_comes, file.path(dir_output, "Manuscript_figures_data", "C_growth_curves_Ccomes_Taurolitocholic_acid.xlsx"))
+
+# plot
+ggplot(data = plot_data, aes(x = TIME, y = OD.corr.t0, color = DRUG.name, fill = DRUG.name, shape = DRUG.name)) +
+  stat_summary(fun = mean, geom = "line", linewidth = 0.25, show.legend = FALSE) +
+  stat_summary(fun = mean, geom = "point", size = 1, color = "black") +
+  geom_errorbar(stat = "summary", fun.data = mean_sd, linewidth = 0.25, width = 0.22, show.legend = FALSE) +
+  scale_color_manual(values = c("DMSO" = "grey25", "Taurolitocholic acid" = "gold2")) +
+  scale_fill_manual(values = c("DMSO" = "grey25", "Taurolitocholic acid" = "gold2")) +
+  scale_shape_manual(values = c("DMSO" = 5, "Taurolitocholic acid" = 21)) +
+  scale_y_continuous(limits = c(0, 1.1), expand = expansion(mult = c(0.05, 0.1))) +
+  coord_cartesian(clip = "off") +
+  geom_vline(xintercept = 7, linetype = "dashed", color = "black", linewidth = 0.2) +
+  geom_vline(xintercept = 9, linetype = "dashed", color = "black", linewidth = 0.2) +
+  annotate("text", x = 7.5, y = 1, label = "t-microscopy", size = 4/.pt, hjust = 1.15, vjust = 0, color = "grey10") +
+  annotate("text", x = 9.5, y = 0, label = "AUC.expo.end.gc", size = 4/.pt, hjust = 0, vjust = 0, color = "grey10") +
+  theme_classic(base_size = 6) +
+  labs(
+    title = "C. comes (n = 2)",
+    y = "OD578 (t0-corrected)",
+    x = "Time (h)",
+    ) +
+  theme(
+    plot.title.position = "plot",
+    legend.title = element_blank(),
+    legend.position = "bottom",
+    legend.margin = margin(grid::unit(0, "cm")),
+    legend.key.height = grid::unit(0.3, "cm"),
+    legend.key.width = grid::unit(0.3, "cm"),
+    )
+
+# egg
+plot_egg = egg::set_panel_size(last_plot(), 
+                               width  = unit(width, "mm"),
+                               height = unit(heigth_gc, "mm"))
+
+# Save
+ggsave(filename = file.path(dir_output, "Manuscript_figures", "C_growth_curves_Ccomes_Taurolitocholic_acid.pdf"),
+       plot = plot_egg,
+       device = cairo_pdf(),
+       width = width_block,
+       height = heigth_block,
+       unit = "mm",
+       dpi = 300)
+```
+
+```{r}
+## _____________________________________________________
+# Growth curve R. intestinalis
+
+# prepare data
+plot_data = df_corr %>% 
+  filter(SPECIES.name == "R.intestinalis",
+         DRUG.name %in% c("DMSO", "BA-14"),
+         REPLICATE %in% c(1,2, 3)) %>%
+  mutate(DRUG.name = recode(DRUG.name,
+                         "BA-14" = "Taurolitocholic acid",
+                         "DMSO" = "DMSO"
+                         )) %>%
+  mutate(DRUG.name = factor(DRUG.name, levels = c("DMSO","Taurolitocholic acid")))
+
+# Save data:
+data_C_rint = plot_data %>% 
+                      select(SPECIES.name, DRUG.name, REPLICATE, TIME, OD.corr.t0) %>% 
+                      group_by(SPECIES.name, DRUG.name, REPLICATE, TIME) %>% 
+                      summarise(OD.corr.t0 = mean(OD.corr.t0), .groups = "drop")
+# writexl::write_xlsx(data_C_rint, file.path(dir_output, "Manuscript_figures_data", "C_growth_curves_Rintestinalis_Taurolitocholic_acid.xlsx"))
+
+# plot
+ggplot(data = plot_data, aes(x = TIME, y = OD.corr.t0, color = DRUG.name, fill = DRUG.name, shape = DRUG.name)) +
+  stat_summary(fun = mean, geom = "line", linewidth = 0.25, show.legend = FALSE) +
+  stat_summary(fun = mean, geom = "point", size = 1, color = "black") +
+  geom_errorbar(stat = "summary", fun.data = mean_sd, linewidth = 0.25, width = 0.22, show.legend = FALSE) +
+  scale_color_manual(values = c("DMSO" = "grey25", "Taurolitocholic acid" = "gold2")) +
+  scale_fill_manual(values = c("DMSO" = "grey25", "Taurolitocholic acid" = "gold2")) +
+  scale_shape_manual(values = c("DMSO" = 5, "Taurolitocholic acid" = 21)) +
+  scale_y_continuous(limits = c(0, 0.75), expand = expansion(mult = c(0.05, 0.1))) +
+  coord_cartesian(clip = "off") +
+  geom_vline(xintercept = 9, linetype = "dashed", color = "black", linewidth = 0.2) +
+  geom_vline(xintercept = 12, linetype = "dashed", color = "black", linewidth = 0.2) +
+  annotate("text", x = 9.5, y = 0.7, label = "t-microscopy", size = 4/.pt, hjust = 1.15, vjust = 0, color = "grey10") +
+  annotate("text", x = 12.5, y = 0, label = "AUC.expo.end.gc", size = 4/.pt, hjust = 0, vjust = 0, color = "grey10") +
+  theme_classic(base_size = 6) +
+  labs(
+    title = "R. intestinalis (n = 3)",
+    y = "OD578 (t0-corrected)",
+    x = "Time (h)",
+    ) +
+  theme(
+    plot.title.position = "plot",
+    legend.title = element_blank(),
+    legend.position = "bottom",
+    legend.margin = margin(grid::unit(0, "cm")),
+    legend.key.height = grid::unit(0.3, "cm"),
+    legend.key.width = grid::unit(0.3, "cm"),
+    )
+
+# egg
+plot_egg = egg::set_panel_size(last_plot(), 
+                               width  = unit(width, "mm"),
+                               height = unit(heigth_gc, "mm"))
+
+# Save
+ggsave(filename = file.path(dir_output, "Manuscript_figures", "C_growth_curves_Rint_Taurolitocholic_acid.pdf"),
+       plot = plot_egg,
+       device = cairo_pdf(),
+       width = width_block,
+       height = heigth_block,
+       unit = "mm",
+       dpi = 300)
+```
+
+### Combine growth curve data for saving
+
+```{r}
+data_gc_comes = bind_rows(data_A_comes, data_B_comes %>% filter(DRUG.name != "DMSO"), data_C_comes %>% filter(DRUG.name != "DMSO"))
+data_gc_rint = bind_rows(data_A_rint, data_B_rint %>% filter(DRUG.name != "DMSO"), data_C_rint %>% filter(DRUG.name != "DMSO"))
+
+writexl::write_xlsx(data_gc_comes, file.path(dir_output, "Manuscript_figures_data", "growth_curves_Ccomes.xlsx"))
+writexl::write_xlsx(data_gc_rint, file.path(dir_output, "Manuscript_figures_data", "growth_curves_Rintestinalis.xlsx"))
+```
+
+## AUC metrics
+
+```{r}
+time.end.expo.gc.Ccomes = 9
+time.end.expo.gc.Rint = 12
+```
+
+### Panel A - Chenodeoxycholic acid
+
+```{r}
+## _____________________________________________________
+# AUC C. comes
+
+# prepare data
+plot_data = df_processed %>%
+  filter(SPECIES.name == "C.comes",
+         DRUG.name %in% c("DMSO", "BA-4"),
+         REPLICATE %in% c(1, 3)) %>% 
+  group_by(SPECIES.name, REPLICATE, DRUG.name, CONDITION) %>%
+  summarise(AUC = mean(AUC, na.rm = TRUE),
+            AUC.expo.end.gc = mean(AUC.expo.end.gc, na.rm = TRUE),
+            .groups = "drop") %>%
+  dplyr::mutate(DRUG.name = factor(DRUG.name),
+                SPECIES.name = factor(SPECIES.name),
+                CONDITION = factor(CONDITION)) %>%
+  rename(AUC.22h = AUC) %>%  
+  pivot_longer(cols = c(AUC.22h, AUC.expo.end.gc),
+               names_to = "METRIC.name",
+               values_to = "METRIC.value") %>%
+  dplyr::mutate(METRIC.name = factor(METRIC.name, levels = c("AUC.expo.end.gc", "AUC.22h"))) %>%
+  mutate(DRUG.name = recode(DRUG.name,
+                         "BA-4" = "Chenodeoxycholic acid",
+                         "DMSO" = "DMSO"
+                         )) %>% 
+  mutate(DRUG.name = factor(DRUG.name, levels = c("DMSO","Chenodeoxycholic acid")))
+
+# Save data:
+data_A_comes = plot_data
+# writexl::write_xlsx(data_A_comes, file.path(dir_output, "Manuscript_figures_data", "A_metrics_Ccomes_chenodeoxycholic_acid.xlsx"))
+
+# plot
+ggplot(data = plot_data,
+       aes(x = DRUG.name, y = METRIC.value, fill = DRUG.name, shape = DRUG.name)) +
+  facet_wrap(~METRIC.name, scales = "free") +
+  geom_boxplot(outlier.shape = NA, width = 0.6) +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.1))) +
+  geom_point(size = 1, color = "black", position = position_jitter(width = 0.2)) +
+  scale_fill_manual(values = c("DMSO" = "white", "Chenodeoxycholic acid" = "#006290")) +
+  scale_shape_manual(values = c("DMSO" = 5, "Chenodeoxycholic acid" = 21)) +
+  coord_cartesian(clip = "off") +
+  ggpubr::stat_pwc(
+    method = "t.test",
+    method.args = list(var.equal = FALSE, alternative = "two.sided"),
+    p.adjust.method = "BH",
+    label = "p.adj.format",
+    hide.ns = F,
+    label.size = 2,
+    tip.length = 0,
+  ) +
+  theme_classic(base_size = 6) +
+  labs(
+    title = "C. comes (n = 2)",
+    y = "value",
+    x = "",
+  ) +
+  theme(
+    plot.title.position = "plot",
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.title = element_blank(),
+    legend.position = "none",
+    strip.background = element_rect(fill = "grey90", color = "black"),
+  )
+
+# egg
+plot_egg = egg::set_panel_size(last_plot(),
+                               width  = unit(width/2, "mm"),
+                               height = unit(heigth, "mm"))
+
+# Save
+ggsave(filename = file.path(dir_output, "Manuscript_figures", "A_AUC_Ccomes_chenodeoxycholic_acid.pdf"),
+       plot = plot_egg,
+       device = cairo_pdf(),
+       width = width_block,
+       height = heigth_block,
+       unit = "mm",
+       dpi = 300)
+```
+
+```{r}
+## _____________________________________________________
+# AUC R. intestinalis
+
+# prepare data
+plot_data = df_processed %>%
+  filter(SPECIES.name == "R.intestinalis",
+         DRUG.name %in% c("DMSO", "BA-4"),
+         REPLICATE %in% c(1, 2, 3)) %>% 
+  group_by(SPECIES.name, REPLICATE, DRUG.name, CONDITION) %>%
+  summarise(AUC = mean(AUC, na.rm = TRUE),
+            AUC.expo.end.gc = mean(AUC.expo.end.gc, na.rm = TRUE),
+            .groups = "drop") %>%
+  dplyr::mutate(DRUG.name = factor(DRUG.name),
+                SPECIES.name = factor(SPECIES.name),
+                CONDITION = factor(CONDITION)) %>%
+  rename(AUC.22h = AUC) %>%  
+  pivot_longer(cols = c(AUC.22h, AUC.expo.end.gc),
+               names_to = "METRIC.name",
+               values_to = "METRIC.value") %>%
+  dplyr::mutate(METRIC.name = factor(METRIC.name, levels = c("AUC.expo.end.gc", "AUC.22h"))) %>%
+  mutate(DRUG.name = recode(DRUG.name,
+                         "BA-4" = "Chenodeoxycholic acid",
+                         "DMSO" = "DMSO"
+                         )) %>% 
+  mutate(DRUG.name = factor(DRUG.name, levels = c("DMSO","Chenodeoxycholic acid")))
+
+# Save data:
+data_A_rint = plot_data
+# writexl::write_xlsx(data_A_rint, file.path(dir_output, "Manuscript_figures_data", "A_metrics_Rintestinalis_chenodeoxycholic_acid.xlsx"))
+
+# plot
+ggplot(data = plot_data,
+       aes(x = DRUG.name, y = METRIC.value, fill = DRUG.name, shape = DRUG.name)) +
+  facet_wrap(~METRIC.name, scales = "free") +
+  geom_boxplot(outlier.shape = NA, width = 0.6) +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.1))) +
+  geom_point(size = 1, color = "black", position = position_jitter(width = 0.2)) +
+  scale_fill_manual(values = c("DMSO" = "white", "Chenodeoxycholic acid" = "#006290")) +
+  scale_shape_manual(values = c("DMSO" = 5, "Chenodeoxycholic acid" = 21)) +
+  coord_cartesian(clip = "off") +
+  ggpubr::stat_pwc(
+    method = "t.test",
+    method.args = list(var.equal = FALSE, alternative = "two.sided"),
+    p.adjust.method = "BH",
+    label = "p.adj.format",
+    hide.ns = F,
+    label.size = 2,
+    tip.length = 0,
+  ) +
+  theme_classic(base_size = 6) +
+  labs(
+    title = "R. intestinalis (n = 3)",
+    y = "value",
+    x = "",
+  ) +
+  theme(
+    plot.title.position = "plot",
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.title = element_blank(),
+    legend.position = "none",
+    strip.background = element_rect(fill = "grey90", color = "black"),
+  )
+
+# egg
+plot_egg = egg::set_panel_size(last_plot(),
+                               width  = unit(width/2, "mm"),
+                               height = unit(heigth, "mm"))
+
+# Save
+ggsave(filename = file.path(dir_output, "Manuscript_figures", "A_AUC_Rint_chenodeoxycholic_acid.pdf"),
+       plot = plot_egg,
+       device = cairo_pdf(),
+       width = width_block,
+       height = heigth_block,
+       unit = "mm",
+       dpi = 300)
+```
+
+### Panel B - Taurochondeoxycholic acid
+
+
+```{r}
+## _____________________________________________________
+# AUC C. comes
+
+# prepare data
+plot_data = df_processed %>%
+  filter(SPECIES.name == "C.comes",
+         DRUG.name %in% c("DMSO", "BA-6"),
+         REPLICATE %in% c(1, 3)) %>% 
+  group_by(SPECIES.name, REPLICATE, DRUG.name, CONDITION) %>%
+  summarise(AUC = mean(AUC, na.rm = TRUE),
+            AUC.expo.end.gc = mean(AUC.expo.end.gc, na.rm = TRUE),
+            .groups = "drop") %>%
+  dplyr::mutate(DRUG.name = factor(DRUG.name),
+                SPECIES.name = factor(SPECIES.name),
+                CONDITION = factor(CONDITION)) %>%
+  rename(AUC.22h = AUC) %>%  
+  pivot_longer(cols = c(AUC.22h, AUC.expo.end.gc),
+               names_to = "METRIC.name",
+               values_to = "METRIC.value") %>%
+  dplyr::mutate(METRIC.name = factor(METRIC.name, levels = c("AUC.expo.end.gc", "AUC.22h"))) %>%
+  mutate(DRUG.name = recode(DRUG.name,
+                         "BA-6" = "Taurochondeoxycholic acid",
+                         "DMSO" = "DMSO"
+                         )) %>% 
+  mutate(DRUG.name = factor(DRUG.name, levels = c("DMSO","Taurochondeoxycholic acid")))
+
+# Save data:
+data_B_comes = plot_data
+# writexl::write_xlsx(data_B_comes, file.path(dir_output, "Manuscript_figures_data", "B_metrics_Ccomes_Taurochondeoxycholic_acid.xlsx"))
+
+# plot
+ggplot(data = plot_data,
+       aes(x = DRUG.name, y = METRIC.value, fill = DRUG.name, shape = DRUG.name)) +
+  facet_wrap(~METRIC.name, scales = "free") +
+  geom_boxplot(outlier.shape = NA, width = 0.6, alpha = 0.6) +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.1))) +
+  geom_point(size = 1, color = "black", position = position_jitter(width = 0.2)) +
+  scale_fill_manual(values = c("DMSO" = "white", "Taurochondeoxycholic acid" = "#578B21")) +
+  scale_shape_manual(values = c("DMSO" = 5, "Taurochondeoxycholic acid" = 21)) +
+  coord_cartesian(clip = "off") +
+  ggpubr::stat_pwc(
+    method = "t.test",
+    method.args = list(var.equal = FALSE, alternative = "two.sided"),
+    p.adjust.method = "BH",
+    label = "p.adj.format",
+    hide.ns = F,
+    label.size = 2,
+    tip.length = 0,
+  ) +
+  theme_classic(base_size = 6) +
+  labs(
+    title = "C. comes (n = 2)",
+    y = "value",
+    x = "",
+  ) +
+  theme(
+    plot.title.position = "plot",
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.title = element_blank(),
+    legend.position = "none",
+    strip.background = element_rect(fill = "grey90", color = "black"),
+  )
+
+# egg
+plot_egg = egg::set_panel_size(last_plot(),
+                               width  = unit(width/2, "mm"),
+                               height = unit(heigth, "mm"))
+
+# Save
+ggsave(filename = file.path(dir_output, "Manuscript_figures", "B_AUC_Ccomes_Taurochondeoxycholic_acid.pdf"),
+       plot = plot_egg,
+       device = cairo_pdf(),
+       width = width_block,
+       height = heigth_block,
+       unit = "mm",
+       dpi = 300)
+```
+
+```{r}
+## _____________________________________________________
+# AUC R. intestinalis
+
+# prepare data
+plot_data = df_processed %>%
+  filter(SPECIES.name == "R.intestinalis",
+         DRUG.name %in% c("DMSO", "BA-6"),
+         REPLICATE %in% c(1, 2, 3)) %>% 
+  group_by(SPECIES.name, REPLICATE, DRUG.name, CONDITION) %>%
+  summarise(AUC = mean(AUC, na.rm = TRUE),
+            AUC.expo.end.gc = mean(AUC.expo.end.gc, na.rm = TRUE),
+            .groups = "drop") %>%
+  dplyr::mutate(DRUG.name = factor(DRUG.name),
+                SPECIES.name = factor(SPECIES.name),
+                CONDITION = factor(CONDITION)) %>%
+  rename(AUC.22h = AUC) %>%  
+  pivot_longer(cols = c(AUC.22h, AUC.expo.end.gc),
+               names_to = "METRIC.name",
+               values_to = "METRIC.value") %>%
+  dplyr::mutate(METRIC.name = factor(METRIC.name, levels = c("AUC.expo.end.gc", "AUC.22h"))) %>%
+  mutate(DRUG.name = recode(DRUG.name,
+                         "BA-6" = "Taurochondeoxycholic acid",
+                         "DMSO" = "DMSO"
+                         )) %>% 
+  mutate(DRUG.name = factor(DRUG.name, levels = c("DMSO","Taurochondeoxycholic acid")))
+
+# Save data:
+data_B_rint = plot_data
+# writexl::write_xlsx(data_B_rint, file.path(dir_output, "Manuscript_figures_data", "B_metrics_Rintestinalis_Taurochondeoxycholic_acid.xlsx"))
+
+# plot
+ggplot(data = plot_data,
+       aes(x = DRUG.name, y = METRIC.value, fill = DRUG.name, shape = DRUG.name)) +
+  facet_wrap(~METRIC.name, scales = "free") +
+  geom_boxplot(outlier.shape = NA, width = 0.6, alpha = 0.6) +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.1))) +
+  geom_point(size = 1, color = "black", position = position_jitter(width = 0.2)) +
+  scale_fill_manual(values = c("DMSO" = "white", "Taurochondeoxycholic acid" = "#578B21")) +
+  scale_shape_manual(values = c("DMSO" = 5, "Taurochondeoxycholic acid" = 21)) +
+  coord_cartesian(clip = "off") +
+  ggpubr::stat_pwc(
+    method = "t.test",
+    method.args = list(var.equal = FALSE, alternative = "two.sided"),
+    p.adjust.method = "BH",
+    label = "p.adj.format",
+    hide.ns = F,
+    label.size = 2,
+    tip.length = 0,
+  ) +
+  theme_classic(base_size = 6) +
+  labs(
+    title = "R. intestinalis (n = 3)",
+    y = "value",
+    x = "",
+  ) +
+  theme(
+    plot.title.position = "plot",
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.title = element_blank(),
+    legend.position = "none",
+    strip.background = element_rect(fill = "grey90", color = "black"),
+  )
+
+# egg
+plot_egg = egg::set_panel_size(last_plot(),
+                               width  = unit(width/2, "mm"),
+                               height = unit(heigth, "mm"))
+
+# Save
+ggsave(filename = file.path(dir_output, "Manuscript_figures", "B_AUC_Rint_Taurochondeoxycholic_acid.pdf"),
+       plot = plot_egg,
+       device = cairo_pdf(),
+       width = width_block,
+       height = heigth_block,
+       unit = "mm",
+       dpi = 300)
+```
+
+### Panel C - Taurolitocholic acid
+
+```{r}
+## _____________________________________________________
+# AUC C. comes
+
+# prepare data
+plot_data = df_processed %>%
+  filter(SPECIES.name == "C.comes",
+         DRUG.name %in% c("DMSO", "BA-14"),
+         REPLICATE %in% c(1, 3)) %>% 
+  group_by(SPECIES.name, REPLICATE, DRUG.name, CONDITION) %>%
+  summarise(AUC = mean(AUC, na.rm = TRUE),
+            AUC.expo.end.gc = mean(AUC.expo.end.gc, na.rm = TRUE),
+            .groups = "drop") %>%
+  dplyr::mutate(DRUG.name = factor(DRUG.name),
+                SPECIES.name = factor(SPECIES.name),
+                CONDITION = factor(CONDITION)) %>%
+  rename(AUC.22h = AUC) %>%  
+  pivot_longer(cols = c(AUC.22h, AUC.expo.end.gc),
+               names_to = "METRIC.name",
+               values_to = "METRIC.value") %>%
+  dplyr::mutate(METRIC.name = factor(METRIC.name, levels = c("AUC.expo.end.gc", "AUC.22h"))) %>%
+  mutate(DRUG.name = recode(DRUG.name,
+                         "BA-14" = "Taurolitocholic acid",
+                         "DMSO" = "DMSO"
+                         )) %>% 
+  mutate(DRUG.name = factor(DRUG.name, levels = c("DMSO","Taurolitocholic acid")))
+
+# Save data:
+data_C_comes = plot_data
+# writexl::write_xlsx(data_C_comes, file.path(dir_output, "Manuscript_figures_data", "C_metrics_Ccomes_Taurolitocholic_acid.xlsx"))
+
+# plot
+ggplot(data = plot_data,
+       aes(x = DRUG.name, y = METRIC.value, fill = DRUG.name, shape = DRUG.name)) +
+  facet_wrap(~METRIC.name, scales = "free") +
+  geom_boxplot(outlier.shape = NA, width = 0.6) +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.1))) +
+  geom_point(size = 1, color = "black", position = position_jitter(width = 0.2)) +
+  scale_fill_manual(values = c("DMSO" = "white", "Taurolitocholic acid" = "gold2")) +
+  scale_shape_manual(values = c("DMSO" = 5, "Taurolitocholic acid" = 21)) +
+  coord_cartesian(clip = "off") +
+  ggpubr::stat_pwc(
+    method = "t.test",
+    method.args = list(var.equal = FALSE, alternative = "two.sided"),
+    p.adjust.method = "BH",
+    label = "p.adj.format",
+    hide.ns = F,
+    label.size = 2,
+    tip.length = 0,
+  ) +
+  theme_classic(base_size = 6) +
+  labs(
+    title = "C. comes (n = 2)",
+    y = "value",
+    x = "",
+  ) +
+  theme(
+    plot.title.position = "plot",
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.title = element_blank(),
+    legend.position = "none",
+    strip.background = element_rect(fill = "grey90", color = "black"),
+  )
+
+# egg
+plot_egg = egg::set_panel_size(last_plot(),
+                               width  = unit(width/2, "mm"),
+                               height = unit(heigth, "mm"))
+
+# Save
+ggsave(filename = file.path(dir_output, "Manuscript_figures", "C_AUC_Ccomes_Taurolitocholic_acid.pdf"),
+       plot = plot_egg,
+       device = cairo_pdf(),
+       width = width_block,
+       height = heigth_block,
+       unit = "mm",
+       dpi = 300)
+```
+
+```{r}
+## _____________________________________________________
+# AUC R. intestinalis
+
+# prepare data
+plot_data = df_processed %>%
+  filter(SPECIES.name == "R.intestinalis",
+         DRUG.name %in% c("DMSO", "BA-14"),
+         REPLICATE %in% c(1, 2, 3)) %>% 
+  group_by(SPECIES.name, REPLICATE, DRUG.name, CONDITION) %>%
+  summarise(AUC = mean(AUC, na.rm = TRUE),
+            AUC.expo.end.gc = mean(AUC.expo.end.gc, na.rm = TRUE),
+            .groups = "drop") %>%
+  dplyr::mutate(DRUG.name = factor(DRUG.name),
+                SPECIES.name = factor(SPECIES.name),
+                CONDITION = factor(CONDITION)) %>%
+  rename(AUC.22h = AUC) %>%  
+  pivot_longer(cols = c(AUC.22h, AUC.expo.end.gc),
+               names_to = "METRIC.name",
+               values_to = "METRIC.value") %>%
+  dplyr::mutate(METRIC.name = factor(METRIC.name, levels = c("AUC.expo.end.gc", "AUC.22h"))) %>%
+  mutate(DRUG.name = recode(DRUG.name,
+                         "BA-14" = "Taurolitocholic acid",
+                         "DMSO" = "DMSO"
+                         )) %>% 
+  mutate(DRUG.name = factor(DRUG.name, levels = c("DMSO","Taurolitocholic acid")))
+
+# Save data:
+data_C_rint = plot_data
+# writexl::write_xlsx(data_C_rint, file.path(dir_output, "Manuscript_figures_data", "C_metrics_Rintestinalis_Taurolitocholic_acid.xlsx"))
+
+# plot
+ggplot(data = plot_data,
+       aes(x = DRUG.name, y = METRIC.value, fill = DRUG.name, shape = DRUG.name)) +
+  facet_wrap(~METRIC.name, scales = "free") +
+  geom_boxplot(outlier.shape = NA, width = 0.6) +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.1))) +
+  geom_point(size = 1, color = "black", position = position_jitter(width = 0.2)) +
+  scale_fill_manual(values = c("DMSO" = "white", "Taurolitocholic acid" = "gold2")) +
+  scale_shape_manual(values = c("DMSO" = 5, "Taurolitocholic acid" = 21)) +
+  coord_cartesian(clip = "off") +
+  ggpubr::stat_pwc(
+    method = "t.test",
+    method.args = list(var.equal = FALSE, alternative = "two.sided"),
+    p.adjust.method = "BH",
+    label = "p.adj.format",
+    hide.ns = F,
+    label.size = 2,
+    tip.length = 0,
+  ) +
+  theme_classic(base_size = 6) +
+  labs(
+    title = "R. intestinalis (n = 3)",
+    y = "value",
+    x = "",
+  ) +
+  theme(
+    plot.title.position = "plot",
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.title = element_blank(),
+    legend.position = "none",
+    strip.background = element_rect(fill = "grey90", color = "black"),
+  )
+
+# egg
+plot_egg = egg::set_panel_size(last_plot(),
+                               width  = unit(width/2, "mm"),
+                               height = unit(heigth, "mm"))
+
+# Save
+ggsave(filename = file.path(dir_output, "Manuscript_figures", "C_AUC_Rint_Taurolitocholic_acid.pdf"),
+       plot = plot_egg,
+       device = cairo_pdf(),
+       width = width_block,
+       height = heigth_block,
+       unit = "mm",
+       dpi = 300)
+```
+
+### Combine AUC metrics data for saving
+
+```{r}
+data_gc_comes = bind_rows(data_A_comes, data_B_comes %>% filter(DRUG.name != "DMSO"), data_C_comes %>% filter(DRUG.name != "DMSO"))
+data_gc_rint = bind_rows(data_A_rint, data_B_rint %>% filter(DRUG.name != "DMSO"), data_C_rint %>% filter(DRUG.name != "DMSO"))
+
+writexl::write_xlsx(data_gc_comes, file.path(dir_output, "Manuscript_figures_data", "growth_curves_metrics_Ccomes.xlsx"))
+writexl::write_xlsx(data_gc_rint, file.path(dir_output, "Manuscript_figures_data", "growth_curves_metrics_Rintestinalis.xlsx"))
+```
+
