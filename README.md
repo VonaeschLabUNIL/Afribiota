@@ -12,6 +12,6 @@
 ## R files Vonaesch et al. PNAS 20222:
 > P. Vonaesch, J.R. Araújo, J. Gody, J. Mbecko, H. Sanke, L. Andrianonimiadana, T. Naharimanananirina, S.N. Ningatoloum, S.S. Vondo, P.B. Gondje, A. Rodriguez-Pozo, M. Rakotondrainipiana, K.J.E. Kandou, A. Nestoret, N. Kapel, S.G. Djorie, B.B. Finlay, L. Wegener Parfrey, J. Collard, R.V. Randremanana, P.J. Sansonetti, & The Afribiota Investigators, Stunted children display ectopic small intestinal colonization by oral bacteria, which cause lipid malabsorption in experimental models, Proc. Natl. Acad. Sci. U.S.A. 119 (41) e2209589119, https://doi.org/10.1073/pnas.2209589119 (2022).
 
-## R files Biomarkers
+## R files Biomarkers:
 Vonaesch, P.; Winkel, M.; Kapel, N.; Nestoret, A.; Barbot-Trystram, L.; Pontoizeau, C.; Barouki, R.; Rakotondrainipiana, M.; Kandou, K.; Andriamanantena, Z.; et al. Putative Biomarkers of Environmental Enteric Disease Fail to Correlate in a Cross-Sectional Study in Two Study Sites in Sub-Saharan Africa. Nutrients 2022, 14, 3312. https://doi.org/10.3390/nu14163312
  
